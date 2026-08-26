@@ -10,6 +10,7 @@ venv/
 
 # Tooling
 .pytest_cache/
+.vscode/
 
 # Generated Excel reports
 *.xlsx
