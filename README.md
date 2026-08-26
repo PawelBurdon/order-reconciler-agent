@@ -63,7 +63,35 @@ the same tool fails visibly instead of quietly.
 The SDK can run this loop for you - hand it Python callables instead of
 declarations and it calls them itself. That is switched off on purpose here.
 
+## The tools
+
+Six functions are declared to the model. It never sees anything else.
+
+| Tool | What it returns |
+| --- | --- |
+| `load_and_compare()` | Reads both files and reconciles them. Reports the real customer names, the valid statuses and the period covered, so later calls use values that exist. |
+| `get_summary()` | Aggregate figures for the whole comparison: lines matched, lines differing, the breakdown by status, planned against actual units, total under- and over-delivery. |
+| `filter_records(customer, status, date_from, date_to)` | Totals computed over every matching line, plus at most 20 example rows. All arguments optional, combined with AND. |
+| `top_discrepancies(by, limit)` | The largest deviations from the plan, ranked by absolute size. `by` is `qty_diff` or `qty_diff_pct`. |
+| `group_by(dimension, sort_by, date_from, date_to, limit)` | Every customer, SKU or status as its own group with its own totals, worst first. |
+| `generate_report(output_path)` | Writes the three-sheet Excel file and returns the path. |
+
+The descriptions in the schema are the only thing the model reads when it
+chooses, so each one says *when* to use the tool rather than only what it does,
+and the pairs that are easy to confuse name each other: `filter_records` points
+at `top_discrepancies` for "the biggest", `top_discrepancies` points back for
+"filtered by customer or period", and `group_by` says outright never to loop
+`filter_records` over customers.
+
 ## Why two layers
+
+```
+src/
+  core/      loader.py  reconciler.py  report.py    plain pandas, no AI
+  agent/     tools.py   agent.py       prompts.py   schemas, loop, prompt
+  main.py                                           the CLI
+```
+
 
 The model decides *which* question to ask of the data. It never answers it.
 
@@ -296,8 +324,34 @@ or stock information here, and it only reads. That is the single thing it is
 allowed to answer without calling a tool, because it is a fact about the
 program rather than a fact about the orders.
 
-Both commands accept `--planned` and `--actual` to point at your own CSV files
-instead of `sample_data/`.
+All three commands accept `--planned` and `--actual` to point at your own files
+instead of `sample_data/`, and `ask` and `chat` also accept `--model`.
+
+### Using your own data
+
+Two CSV files, with exactly these columns:
+
+```
+planned_orders.csv    order_id, customer, sku, planned_qty, planned_date
+actual_orders.csv     order_id, customer, sku, actual_qty,  actual_date
+```
+
+Dates are `YYYY-MM-DD`. Quantities are whole units. A missing date is
+tolerated and surfaces as a data-quality flag rather than a discrepancy,
+because a blank cell in a delivery date is a real thing that happens; a
+missing `order_id`, `sku` or quantity is refused, because the comparison
+cannot mean anything without them. Either way the loader names the file and
+the line number instead of raising a traceback:
+
+```
+Data error: sample_data/actual_orders.csv: column 'actual_qty' contains
+non-numeric value(s) in line(s) 14: 'twelve'.
+```
+
+The same `order_id` may appear on several lines when an order covers several
+products - that is why the comparison keys on `order_id` plus `sku`. The same
+`order_id` and `sku` twice is read as a split delivery: the quantities are
+added up and the line is flagged `SPLIT_DELIVERY`.
 
 Tests:
 
