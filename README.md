@@ -4,6 +4,33 @@ An AI agent that answers plain-English questions about the gaps between what
 customers ordered and what was actually delivered, with every number computed
 by a deterministic Python layer rather than by the model.
 
+## Quick look
+
+- **What it is.** Two CSV files - orders as planned, orders as delivered - and
+  a Gemini agent that answers questions about the difference between them by
+  calling six Python functions. No LangChain: raw function calling and a loop
+  written by hand.
+- **Without an API key.** `pip install -r requirements.txt`, then
+  `python -m src.main report --output report.xlsx` writes a three-sheet Excel
+  comparison. No key, no network, no model - that half of the project does not
+  depend on the AI at all.
+- **With an API key.** Put a Gemini key in `.env`, then
+  `python -m src.main ask "..."` for one question or `python -m src.main chat`
+  for a conversation with follow-ups.
+
+```
+$ python -m src.main ask "how many order lines have a discrepancy?"
+
+Out of the 31 total order lines compared between July 3, 2025, and September 25,
+2025, exactly 17 order lines have a discrepancy. This includes 9 lines with
+quantity mismatches, 5 with date mismatches, 2 missing actual deliveries, and 1
+unplanned delivery.
+```
+
+Every one of those numbers came out of pandas and was handed to the model; none
+of them were counted by it. Why that matters, how the loop works, and what the
+six tools are: below.
+
 ## Problem
 
 Anyone who plans deliveries keeps two lists: what was promised and what
