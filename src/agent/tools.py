@@ -1,4 +1,4 @@
-"""The five tools the model is allowed to call, plus their schemas.
+"""The tools the model is allowed to call, plus their schemas.
 
 This module is the whole contract between the AI layer and the deterministic
 layer. Two rules run through all of it:
@@ -197,6 +197,82 @@ def top_discrepancies(by: str = "qty_diff", limit: int = 5) -> dict:
         "excluded_without_baseline": excluded_without_baseline,
         # Signed values, so the model can tell a shortfall from a surplus.
         "records": [_to_record(row) for _, row in ranked.iterrows()],
+    }
+
+
+# The dimensions worth grouping on, and the columns worth ranking the groups by.
+GROUP_DIMENSIONS = ["customer", "sku", "status"]
+GROUP_SORT_KEYS = [
+    "under_delivered_qty",
+    "over_delivered_qty",
+    "net_qty_diff",
+    "discrepancy_lines",
+]
+
+
+@_tool
+def group_by(
+    dimension: str = "customer",
+    sort_by: str = "under_delivered_qty",
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 10,
+) -> dict:
+    """Aggregate the comparison per customer, SKU or status, worst group first.
+
+    This tool exists because of something visible in a --verbose trace: without
+    it, "which customer is worst" was answered by calling filter_records once
+    per customer, which cost one round trip per customer and ran into the
+    iteration limit. The model was compensating for a hole in the tool API. The
+    fix belongs here rather than in the prompt.
+    """
+    if dimension not in GROUP_DIMENSIONS:
+        return {
+            "error": f"Cannot group by '{dimension}'.",
+            "valid_dimensions": GROUP_DIMENSIONS,
+        }
+    if sort_by not in GROUP_SORT_KEYS:
+        return {"error": f"Cannot sort by '{sort_by}'.", "valid_values": GROUP_SORT_KEYS}
+
+    frame = _require_comparison()
+    applied: dict[str, str] = {}
+
+    if date_from or date_to:
+        try:
+            boundaries = _parse_date_range(date_from, date_to)
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+        dates = _effective_dates(frame)
+        if boundaries[0] is not None:
+            frame = frame[dates >= boundaries[0]]
+            applied["date_from"] = date_from
+            dates = _effective_dates(frame)
+        if boundaries[1] is not None:
+            frame = frame[dates <= boundaries[1]]
+            applied["date_to"] = date_to
+
+    groups = []
+    for key, part in frame.groupby(dimension, dropna=False):
+        groups.append(
+            {
+                "group": str(key) if key else "(unknown)",
+                "order_lines": len(part),
+                "discrepancy_lines": int((part["status"] != STATUS_MATCH).sum()),
+                **_totals(part),
+            }
+        )
+
+    groups.sort(key=lambda group: abs(group[sort_by]), reverse=True)
+    limit = max(1, min(int(limit), MAX_RECORDS_RETURNED))
+
+    return {
+        "dimension": dimension,
+        "sorted_by": f"{sort_by}, largest first",
+        "filters_applied": applied,
+        "groups_total": len(groups),
+        "returned": min(len(groups), limit),
+        "groups": groups[:limit],
     }
 
 
@@ -448,6 +524,59 @@ TOOL_DECLARATIONS: list[types.FunctionDeclaration] = [
         ),
     ),
     types.FunctionDeclaration(
+        name="group_by",
+        description=(
+            "Aggregate every order line into groups - per customer, per SKU or "
+            "per status - and return the groups ranked worst first, each with "
+            "its own totals. Use this for any question about which customer, "
+            "product or category is the worst, the best, or how they compare: "
+            "one call covers all of them, so never call filter_records once per "
+            "customer to work this out. Optionally restricted to a date range."
+        ),
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "dimension": types.Schema(
+                    type=types.Type.STRING,
+                    description=(
+                        "What to group by. 'customer' for who is worst served, "
+                        "'sku' for which product goes wrong, 'status' for how "
+                        "the discrepancies break down. Defaults to 'customer'."
+                    ),
+                    enum=list(GROUP_DIMENSIONS),
+                ),
+                "sort_by": types.Schema(
+                    type=types.Type.STRING,
+                    description=(
+                        "Which figure decides the ranking. "
+                        "'under_delivered_qty' for missing units (the usual "
+                        "meaning of worst), 'over_delivered_qty' for surplus, "
+                        "'net_qty_diff' for the balance of the two, "
+                        "'discrepancy_lines' for how many lines went wrong "
+                        "regardless of size. Defaults to under_delivered_qty."
+                    ),
+                    enum=list(GROUP_SORT_KEYS),
+                ),
+                "date_from": types.Schema(
+                    type=types.Type.STRING,
+                    description=(
+                        "Earliest date to include, YYYY-MM-DD. Same date rule as "
+                        "filter_records: the actual delivery date, falling back "
+                        "to the planned date for lines never delivered."
+                    ),
+                ),
+                "date_to": types.Schema(
+                    type=types.Type.STRING,
+                    description="Latest date to include, YYYY-MM-DD, inclusive.",
+                ),
+                "limit": types.Schema(
+                    type=types.Type.INTEGER,
+                    description="How many groups to return, 1 to 20. Defaults to 10.",
+                ),
+            },
+        ),
+    ),
+    types.FunctionDeclaration(
         name="generate_report",
         description=(
             "Write the full comparison to an Excel file with three sheets: "
@@ -475,6 +604,7 @@ TOOL_IMPLEMENTATIONS: dict[str, Callable[..., dict]] = {
     "get_summary": get_summary,
     "filter_records": filter_records,
     "top_discrepancies": top_discrepancies,
+    "group_by": group_by,
     "generate_report": generate_report,
 }
 

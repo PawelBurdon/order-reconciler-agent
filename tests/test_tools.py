@@ -205,6 +205,70 @@ def test_unknown_ranking_column_returns_an_error(small_dataset):
     assert result["valid_values"] == ["qty_diff", "qty_diff_pct"]
 
 
+# -- group_by --------------------------------------------------------------
+
+
+def test_group_by_customer_ranks_the_worst_served_first(small_dataset):
+    result = tools.group_by(dimension="customer")
+
+    names = [group["group"] for group in result["groups"]]
+    # Alpine Gear Co is missing 280 + 50 units, more than anyone else.
+    assert names[0] == "Alpine Gear Co"
+    assert result["groups"][0]["under_delivered_qty"] == 330
+    assert result["groups_total"] == 3
+
+
+def test_group_by_answers_in_one_call_what_filtering_needs_one_call_each(
+    small_dataset,
+):
+    """Every customer appears, so the model never has to loop over them."""
+    result = tools.group_by(dimension="customer")
+
+    assert {group["group"] for group in result["groups"]} == {
+        "Alpine Gear Co",
+        "Northwind Cycles",
+        "Velo Parts Ltd",
+    }
+    assert sum(group["order_lines"] for group in result["groups"]) == 6
+
+
+def test_group_by_can_rank_on_a_different_figure(small_dataset):
+    result = tools.group_by(dimension="customer", sort_by="over_delivered_qty")
+
+    # Northwind Cycles is the only one with a surplus: the unplanned 300 units.
+    assert result["groups"][0]["group"] == "Northwind Cycles"
+    assert result["groups"][0]["over_delivered_qty"] == 300
+
+
+def test_group_by_honours_a_date_range(small_dataset):
+    result = tools.group_by(dimension="customer", date_from="2025-09-01")
+
+    names = {group["group"] for group in result["groups"]}
+    assert names == {"Alpine Gear Co", "Northwind Cycles"}
+
+
+def test_group_by_status_counts_the_lines(small_dataset):
+    result = tools.group_by(dimension="status", sort_by="discrepancy_lines")
+
+    by_status = {group["group"]: group["order_lines"] for group in result["groups"]}
+    assert by_status["MISSING_ACTUAL"] == 1
+    assert by_status["UNPLANNED"] == 1
+
+
+def test_group_by_rejects_an_unknown_dimension(small_dataset):
+    result = tools.group_by(dimension="region")
+
+    assert "error" in result
+    assert result["valid_dimensions"] == ["customer", "sku", "status"]
+
+
+def test_group_by_rejects_an_unknown_sort_key(small_dataset):
+    result = tools.group_by(sort_by="alphabetical")
+
+    assert "error" in result
+    assert "under_delivered_qty" in result["valid_values"]
+
+
 # -- get_summary and dispatch ---------------------------------------------
 
 

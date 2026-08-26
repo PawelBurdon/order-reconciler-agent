@@ -45,10 +45,13 @@ class ReconciliationAgent:
         model: str = DEFAULT_MODEL,
         verbose: bool = False,
         max_iterations: int = MAX_ITERATIONS,
+        remember: bool = False,
     ) -> None:
         self.model = model
         self.verbose = verbose
         self.max_iterations = max_iterations
+        self.remember = remember
+        self.history: list[types.Content] = []
         self.client = genai.Client(api_key=_read_api_key())
 
         self.config = types.GenerateContentConfig(
@@ -66,9 +69,8 @@ class ReconciliationAgent:
 
     def ask(self, question: str) -> str:
         """Run the conversation until the model answers with text."""
-        contents: list[types.Content] = [
-            types.Content(role="user", parts=[types.Part(text=question)])
-        ]
+        contents: list[types.Content] = list(self.history)
+        contents.append(types.Content(role="user", parts=[types.Part(text=question)]))
 
         for iteration in range(1, self.max_iterations + 1):
             response = self.client.models.generate_content(
@@ -77,9 +79,11 @@ class ReconciliationAgent:
 
             calls = response.function_calls or []
             if not calls:
-                return (response.text or "").strip() or (
+                answer = (response.text or "").strip() or (
                     "The model returned an empty answer."
                 )
+                self._remember_exchange(question, answer)
+                return answer
 
             # The model's own turn has to go into the history before the
             # results, otherwise the next request has answers to questions that
@@ -111,6 +115,35 @@ class ReconciliationAgent:
             f"answer. The question may be too broad, or a tool may be returning "
             f"something the model cannot use - rerun with --verbose to see the "
             f"calls it made."
+        )
+
+    def reset(self) -> None:
+        """Forget the conversation so far, keeping the agent usable."""
+        self.history.clear()
+
+    def _remember_exchange(self, question: str, answer: str) -> None:
+        """Keep the question and the answer; throw the tool traffic away.
+
+        This is the whole of the follow-up support, and the discarding is the
+        interesting half. A conversation carries two very different kinds of
+        weight: the questions and answers, which are short and are what a
+        follow-up refers back to, and the tool results, which are by far the
+        bulkiest thing in the history and are already stale by the next
+        question. Keeping everything would make each turn more expensive than
+        the last for no benefit; if the model needs a number again it can call
+        the tool again, which is cheap and cannot go out of date.
+
+        It also keeps the history structurally simple: text in, text out, so
+        there is no way to end up with a function call whose response was
+        pruned - which the API rejects.
+        """
+        if not self.remember:
+            return
+        self.history.append(
+            types.Content(role="user", parts=[types.Part(text=question)])
+        )
+        self.history.append(
+            types.Content(role="model", parts=[types.Part(text=answer)])
         )
 
     # -- verbose tracing ---------------------------------------------------

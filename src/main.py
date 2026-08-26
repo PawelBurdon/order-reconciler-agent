@@ -1,8 +1,10 @@
 """Command line entry point.
 
-Two modes, and the split between them is the point of the project:
+Three commands, and the split between the last one and the rest is the point of
+the project:
 
     python -m src.main ask "which customers under-delivered in September?"
+    python -m src.main chat
     python -m src.main report --output report.xlsx
 
 `report` never imports the agent package. It runs on the core layer alone, so
@@ -40,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if arguments.command == "ask":
             return _run_ask(arguments)
+        if arguments.command == "chat":
+            return _run_chat(arguments)
         return _run_report(arguments)
     except DataValidationError as error:
         # A broken input file is the user's problem to fix, so it gets a plain
@@ -62,19 +66,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "ask", help="Ask a natural-language question about the discrepancies."
     )
     ask.add_argument("question", help="The question, in quotes.")
-    ask.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Print every tool the agent calls, with its arguments and result.",
-    )
-    # No default is spelled out here: agent.py owns the model name, and a copy
-    # of it in a help string is a copy that goes stale.
-    ask.add_argument(
-        "--model",
-        default=None,
-        help="Gemini model to use. Defaults to the model configured in the agent.",
-    )
+    _add_agent_arguments(ask)
     _add_data_source_arguments(ask)
+
+    chat = subparsers.add_parser(
+        "chat", help="Ask questions one after another, with follow-ups."
+    )
+    _add_agent_arguments(chat)
+    _add_data_source_arguments(chat)
 
     report = subparsers.add_parser(
         "report", help="Write the Excel report. Works without an API key."
@@ -88,6 +87,21 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_data_source_arguments(report)
 
     return parser
+
+
+def _add_agent_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print every tool the agent calls, with its arguments and result.",
+    )
+    # No default is spelled out here: agent.py owns the model name, and a copy
+    # of it in a help string is a copy that goes stale.
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Gemini model to use. Defaults to the model configured in the agent.",
+    )
 
 
 def _add_data_source_arguments(parser: argparse.ArgumentParser) -> None:
@@ -135,6 +149,61 @@ def _run_ask(arguments: argparse.Namespace) -> int:
         print("\n[answer]")
     print(answer)
     return 0
+
+
+CHAT_BANNER = """\
+Ask about the order data. Each question can build on the previous one.
+The questions and answers are kept; the tool results behind them are not, so
+the conversation does not get more expensive the longer it runs.
+
+  /reset   forget the conversation so far
+  /exit    quit (Ctrl+C works too)
+"""
+
+
+def _run_chat(arguments: argparse.Namespace) -> int:
+    from google.genai import errors
+
+    from .agent.agent import DEFAULT_MODEL, MissingApiKeyError, ReconciliationAgent
+    from .agent.tools import configure_data_sources
+
+    configure_data_sources(arguments.planned, arguments.actual)
+
+    try:
+        agent = ReconciliationAgent(
+            model=arguments.model or DEFAULT_MODEL,
+            verbose=arguments.verbose,
+            remember=True,
+        )
+    except MissingApiKeyError as error:
+        print(f"Configuration error: {error}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+
+    print(CHAT_BANNER)
+
+    while True:
+        try:
+            question = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+
+        if not question:
+            continue
+        if question in {"/exit", "/quit"}:
+            return 0
+        if question == "/reset":
+            agent.reset()
+            print("Context cleared.\n")
+            continue
+
+        try:
+            print(f"\n{agent.ask(question)}\n")
+        except errors.APIError as error:
+            # A rejected request ends the question, not the session. Hitting a
+            # rate limit three questions in should not throw away the
+            # conversation that got you there.
+            print(f"Gemini API error: {_describe_api_error(error)}\n", file=sys.stderr)
 
 
 def _describe_api_error(error: Exception) -> str:

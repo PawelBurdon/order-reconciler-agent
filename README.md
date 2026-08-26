@@ -109,12 +109,12 @@ $ python -m src.main ask "which customers under-delivered in September?"
 
 In September 2025, three customers experienced under-deliveries (shortfalls):
 
-- Crankset Supply Inc experienced an under-delivery of 60 units on order ORD-1023
-  (SKU CHN-2002) delivered on September 3.
-- Summit Bike Supply experienced an under-delivery of 45 units on order ORD-1025
-  (SKU HDL-4004) delivered on September 9.
-- Alpine Gear Co had an entire order missing (MISSING_ACTUAL) totaling 280 units
-  on order ORD-1028 (SKU TYR-8008) planned for September 19.
+- Alpine Gear Co under-delivered by 280 units (planned 380, actual 100 units
+  across 2 order lines).
+- Crankset Supply Inc under-delivered by 60 units (planned 335, actual 275
+  units across 2 order lines).
+- Summit Bike Supply under-delivered by 45 units (planned 85, actual 40 units
+  across 1 order line).
 ```
 
 `--verbose` shows how it got there:
@@ -123,17 +123,14 @@ In September 2025, three customers experienced under-deliveries (shortfalls):
 [iteration 1]
   -> load_and_compare()
 [iteration 2]
-  -> filter_records(date_to='2025-09-30', date_from='2025-09-01')
-[iteration 3]
-  -> filter_records(date_from='2025-09-01', status='QTY_MISMATCH', date_to='2025-09-30')
-[iteration 4]
-  -> filter_records(date_from='2025-09-01', date_to='2025-09-30', status='MISSING_ACTUAL')
+  -> group_by(sort_by='under_delivered_qty', date_to='2025-09-30',
+              dimension='customer', date_from='2025-09-01')
 ```
 
-Three lookups: the whole month, then the two ways a line can come up short. The
-280 units of the missing order are in there because a line that was never
-delivered has no delivery date and would otherwise fall out of a September
-filter - it is matched on the date it was promised for instead.
+One lookup. Every customer comes back in a single result, so there is no
+per-customer loop to run. The 280 units of the never-delivered order are in
+there because a line with no delivery date would otherwise fall out of a
+September filter - it is matched on the date it was promised for instead.
 
 **2. A ranking question**
 
@@ -157,19 +154,22 @@ to 2025-09-25 period are:
 
 This one exposes a gap in the tools rather than in the model. `top_discrepancies`
 ranks by absolute size, so its top five contains a surplus of 300 units from an
-unplanned delivery - which is a large deviation, but not a shortfall. The model
-noticed, went back and rebuilt the ranking out of `filter_records` calls per
-status:
+unplanned delivery - a large deviation, but not a shortfall. The model notices,
+and then has to assemble the ranking out of whatever else is available:
 
 ```
 [iteration 2]  -> top_discrepancies(limit=5, by='qty_diff')
 [iteration 3]  -> filter_records(status='MISSING_ACTUAL')
-[iteration 4]  -> filter_records(status='QTY_MISMATCH')
-[iteration 5]  -> top_discrepancies(limit=5, by='qty_diff_pct')
+[iteration 4]  -> group_by(dimension='status', sort_by='under_delivered_qty')
+[iteration 5]  -> filter_records(status='QTY_MISMATCH')
 ```
 
-The answer is right, at the cost of three round trips that a `direction`
-argument on `top_discrepancies` would have saved. See the last section.
+The five numbers come out the same on every run. The route does not: another
+run reached them through `group_by(dimension='sku')` instead. That instability
+is the symptom worth reading - when a question has no tool that answers it
+directly, the model improvises, and improvisation is neither cheap nor
+repeatable. A `direction` argument on `top_discrepancies` would collapse all of
+this into one call. See the last section.
 
 **3. An overview question**
 
@@ -184,6 +184,58 @@ unplanned delivery.
 
 Two calls: `load_and_compare()`, then `get_summary()`. Every one of those
 numbers is a field in the returned JSON; none of them were counted by the model.
+
+**4. A conversation, where the second question leans on the first**
+
+```
+$ python -m src.main chat
+
+> which customer is worst?
+
+The customer worst served by under-delivered quantity between July 3, 2025, and
+September 25, 2025, is Alpine Gear Co. They experienced a total under-delivered
+quantity of 332 units (with a planned quantity of 1,100 units and an actual
+delivered quantity of 768 units) spread across 3 discrepancy lines out of their
+5 total order lines.
+
+> and what exactly went wrong for them?
+
+For Alpine Gear Co, five order lines were placed between July 3, 2025, and
+September 25, 2025, two of which matched the plan perfectly.
+
+The remaining three lines encountered issues:
+- Order ORD-1028 (SKU TYR-8008, planned for September 19, 2025) resulted in a
+  complete shortfall of 280 units as a MISSING_ACTUAL delivery.
+- Order ORD-1010 (SKU CBL-1010, delivered July 30, 2025) had a quantity
+  mismatch where 460 units were delivered instead of the planned 500.
+- Order ORD-1016 (SKU SDL-5005, delivered August 19, 2025) was both late by 4
+  days and under-delivered by 12 units.
+```
+
+*them* resolves because the previous exchange is still in the history. What is
+not still in the history is the tool result behind the first answer - see the
+next section.
+
+## What the conversation remembers
+
+`ask` is a single question. `chat` keeps a history, and what it keeps is a
+deliberate choice, because an agent conversation grows in two very different
+ways.
+
+The questions and answers are short, and they are what a follow-up refers back
+to - *them*, *that order*, *the same period*. The tool results are the opposite:
+they are the bulkiest thing in the history by a wide margin, and by the next
+question they are stale. So when an answer is finished, the exchange is
+compacted down to the question and the answer, and the calls behind it are
+dropped. If the model needs a number again it calls the tool again, which is
+cheap and cannot go out of date.
+
+The effect is that a long conversation costs roughly what a short one does,
+instead of every turn being more expensive than the last. It also keeps the
+history structurally simple - text in, text out - so there is no way to end up
+sending a function call whose response was pruned, which the API rejects.
+
+`/reset` clears it when the subject changes.
 
 ## Stack
 
@@ -230,6 +282,12 @@ python -m src.main ask "which customers under-delivered in September?"
 python -m src.main ask "top 5 largest shortfalls" --verbose
 ```
 
+Or keep the conversation open, so follow-up questions work:
+
+```bash
+python -m src.main chat
+```
+
 Both commands accept `--planned` and `--actual` to point at your own CSV files
 instead of `sample_data/`.
 
@@ -264,10 +322,10 @@ of two `filter_records` calls - three extra round trips for something a
 one. The model worked around a hole in the tool API, which is the most common
 way an agent gets slow: the fix belongs in the schema, not in the prompt.
 
-**Give the model a grouping tool.** There is no `group_by(dimension)`, so a
-question like *which customers under-delivered* is answered by filtering per
-customer or per status. It works on six customers; on sixty it would hit the
-iteration limit. Same lesson as above - a tooling change, not a prompt change.
+**Filter the ranking tools the way `group_by` can be filtered.**
+`top_discrepancies` covers the whole dataset and `group_by` takes a date range,
+so *the biggest shortfalls in September* still has no single call that answers
+it. Consistency between tools is part of the schema being usable.
 
 **Make the date comparison tolerant.** A delivery one day late and a delivery
 thirty days late are both `DATE_MISMATCH`. A real reconciliation has a tolerance
@@ -285,8 +343,12 @@ which is also the thing that makes the tool descriptions safe to edit.
 
 **Cache the comparison across runs.** It is recomputed on every invocation.
 Fine for 31 rows, wasteful for a real extract; parquet next to the CSVs with a
-staleness check would fix it.
+staleness check would fix it. `chat` already reuses one comparison for a whole
+session, so the waste is per session rather than per question.
 
-**Support follow-up questions.** Every invocation is a fresh conversation. The
-history is already threaded through the loop, so a REPL that keeps it between
-questions is a small change - and would make the caching above matter more.
+**Measure what the history compaction costs.** `chat` keeps the questions and
+answers and throws the tool results away, on the argument that a stale tool
+result is worth less than the tokens it occupies. That is a reasonable argument
+and an untested one. The way to know is a set of follow-up questions answered
+with and without the pruning, compared - which is the same eval harness as
+above, pointed at a different question.
