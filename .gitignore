@@ -1,0 +1,15 @@
+# Secrets - never commit a real API key
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+
+# Generated Excel reports
+*.xlsx

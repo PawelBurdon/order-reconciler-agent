@@ -1,0 +1,231 @@
+"""Tests for the tools the model is allowed to call.
+
+Nothing here talks to Gemini. A comparison is built in memory and injected with
+set_comparison(), so every test exercises the same code path the agent uses
+without spending a token or needing an API key.
+"""
+
+import pandas as pd
+import pytest
+
+from src.agent import tools
+from src.core.reconciler import reconcile
+
+
+def planned_frame(rows: list[tuple]) -> pd.DataFrame:
+    frame = pd.DataFrame(
+        rows, columns=["order_id", "customer", "sku", "planned_qty", "planned_date"]
+    )
+    frame["planned_qty"] = frame["planned_qty"].astype("Int64")
+    frame["planned_date"] = pd.to_datetime(frame["planned_date"])
+    return frame
+
+
+def actual_frame(rows: list[tuple]) -> pd.DataFrame:
+    frame = pd.DataFrame(
+        rows, columns=["order_id", "customer", "sku", "actual_qty", "actual_date"]
+    )
+    frame["actual_qty"] = frame["actual_qty"].astype("Int64")
+    frame["actual_date"] = pd.to_datetime(frame["actual_date"])
+    return frame
+
+
+@pytest.fixture(autouse=True)
+def clear_cache():
+    """Never let one test see the comparison another test injected."""
+    yield
+    tools.set_comparison(None)
+
+
+@pytest.fixture
+def small_dataset():
+    """Six lines covering every status, spread over two months."""
+    tools.set_comparison(
+        reconcile(
+            planned_frame(
+                [
+                    ("ORD-1", "Velo Parts Ltd", "BRK-1", 120, "2025-08-03"),
+                    ("ORD-2", "Velo Parts Ltd", "CHN-2", 200, "2025-08-05"),
+                    ("ORD-3", "Northwind Cycles", "CRK-3", 60, "2025-08-08"),
+                    ("ORD-4", "Alpine Gear Co", "HDL-4", 90, "2025-09-11"),
+                    ("ORD-5", "Alpine Gear Co", "TYR-8", 280, "2025-09-19"),
+                ]
+            ),
+            actual_frame(
+                [
+                    ("ORD-1", "Velo Parts Ltd", "BRK-1", 120, "2025-08-03"),
+                    ("ORD-2", "Velo Parts Ltd", "CHN-2", 185, "2025-08-05"),
+                    ("ORD-3", "Northwind Cycles", "CRK-3", 60, "2025-08-10"),
+                    ("ORD-4", "Alpine Gear Co", "HDL-4", 40, "2025-09-11"),
+                    ("ORD-6", "Northwind Cycles", "CBL-1", 300, "2025-09-25"),
+                ]
+            ),
+        )
+    )
+
+
+@pytest.fixture
+def wide_dataset():
+    """More lines than a tool is allowed to return, with distinct shortfalls."""
+    planned = [
+        (f"ORD-{index:03d}", "Velo Parts Ltd", "BRK-1", 1000, "2025-08-01")
+        for index in range(25)
+    ]
+    actual = [
+        (f"ORD-{index:03d}", "Velo Parts Ltd", "BRK-1", 1000 - index, "2025-08-01")
+        for index in range(25)
+    ]
+    tools.set_comparison(reconcile(planned_frame(planned), actual_frame(actual)))
+
+
+# -- filter_records --------------------------------------------------------
+
+
+def test_filter_by_customer_is_a_case_insensitive_fragment(small_dataset):
+    result = tools.filter_records(customer="velo")
+
+    assert result["total_matching"] == 2
+    assert {record["customer"] for record in result["records"]} == {"Velo Parts Ltd"}
+
+
+def test_filter_by_status(small_dataset):
+    result = tools.filter_records(status="UNPLANNED")
+
+    assert result["total_matching"] == 1
+    assert result["records"][0]["order_id"] == "ORD-6"
+
+
+def test_filters_combine_with_and(small_dataset):
+    result = tools.filter_records(customer="Alpine", status="QTY_MISMATCH")
+
+    assert result["total_matching"] == 1
+    assert result["records"][0]["order_id"] == "ORD-4"
+
+
+def test_date_filter_uses_the_delivery_date(small_dataset):
+    result = tools.filter_records(date_from="2025-09-01", date_to="2025-09-30")
+
+    returned = {record["order_id"] for record in result["records"]}
+    # ORD-3 was planned for August and delivered in August; it stays out.
+    assert "ORD-3" not in returned
+    # ORD-5 was never delivered, so it is matched on its planned date instead
+    # of dropping out of the month it was promised for.
+    assert "ORD-5" in returned
+    assert returned == {"ORD-4", "ORD-5", "ORD-6"}
+
+
+def test_totals_cover_every_match_not_just_the_returned_rows(wide_dataset):
+    result = tools.filter_records(customer="Velo")
+
+    assert result["total_matching"] == 25
+    assert result["returned"] == 20
+    assert result["truncated"] is True
+    # 0 + 1 + ... + 24 units missing across all 25 lines, including the five
+    # the model never sees. This is the reason the totals exist.
+    assert result["totals_over_all_matches"]["under_delivered_qty"] == 300
+    assert result["totals_over_all_matches"]["status_counts"]["QTY_MISMATCH"] == 24
+
+
+def test_truncation_keeps_the_biggest_deviations(wide_dataset):
+    result = tools.filter_records(customer="Velo")
+
+    assert result["records"][0]["qty_diff"] == -24
+    # The rows that fall off the end are the small ones, never the large ones.
+    smallest_returned = min(abs(record["qty_diff"]) for record in result["records"])
+    assert smallest_returned == 5
+
+
+def test_unknown_customer_returns_an_error_with_the_valid_names(small_dataset):
+    result = tools.filter_records(customer="Acme")
+
+    assert "error" in result
+    assert "Velo Parts Ltd" in result["known_customers"]
+
+
+def test_invalid_status_returns_an_error_with_the_valid_values(small_dataset):
+    result = tools.filter_records(status="LATE")
+
+    assert "error" in result
+    assert "DATE_MISMATCH" in result["valid_statuses"]
+
+
+def test_invalid_date_returns_an_error(small_dataset):
+    result = tools.filter_records(date_from="September")
+
+    assert "error" in result
+    assert "YYYY-MM-DD" in result["error"]
+
+
+def test_reversed_date_range_returns_an_error(small_dataset):
+    result = tools.filter_records(date_from="2025-09-30", date_to="2025-09-01")
+
+    assert "error" in result
+
+
+# -- top_discrepancies -----------------------------------------------------
+
+
+def test_top_discrepancies_ranks_by_absolute_size(small_dataset):
+    result = tools.top_discrepancies(by="qty_diff", limit=3)
+
+    order_ids = [record["order_id"] for record in result["records"]]
+    # A surplus of 300 outranks a shortfall of 280: the ranking is by size, and
+    # the sign in qty_diff is what tells them apart.
+    assert order_ids == ["ORD-6", "ORD-5", "ORD-4"]
+    assert result["records"][0]["qty_diff"] == 300
+    assert result["records"][1]["qty_diff"] == -280
+
+
+def test_top_discrepancies_by_percentage_excludes_lines_without_a_plan(small_dataset):
+    result = tools.top_discrepancies(by="qty_diff_pct", limit=5)
+
+    order_ids = [record["order_id"] for record in result["records"]]
+    assert "ORD-6" not in order_ids
+    # The exclusion is reported rather than silently applied.
+    assert result["excluded_without_baseline"] == 1
+    assert order_ids[0] == "ORD-5"
+
+
+def test_top_discrepancies_ignores_lines_that_match(small_dataset):
+    result = tools.top_discrepancies(by="qty_diff", limit=20)
+
+    assert "ORD-1" not in [record["order_id"] for record in result["records"]]
+
+
+def test_top_discrepancies_limit_is_capped(wide_dataset):
+    result = tools.top_discrepancies(by="qty_diff", limit=500)
+
+    assert result["returned"] == tools.MAX_RECORDS_RETURNED
+
+
+def test_unknown_ranking_column_returns_an_error(small_dataset):
+    result = tools.top_discrepancies(by="delivery_delay")
+
+    assert "error" in result
+    assert result["valid_values"] == ["qty_diff", "qty_diff_pct"]
+
+
+# -- get_summary and dispatch ---------------------------------------------
+
+
+def test_get_summary_reports_the_whole_dataset(small_dataset):
+    summary = tools.get_summary()
+
+    assert summary["total_order_lines"] == 6
+    assert summary["status_counts"]["MISSING_ACTUAL"] == 1
+    assert summary["status_counts"]["UNPLANNED"] == 1
+
+
+def test_execute_tool_rejects_an_invented_tool_name(small_dataset):
+    result = tools.execute_tool("drop_database", {})
+
+    assert "error" in result
+    assert "filter_records" in result["available_tools"]
+
+
+def test_a_crashing_tool_returns_an_error_instead_of_raising(small_dataset):
+    """The loop must never see an exception, whatever the arguments look like."""
+    result = tools.execute_tool("top_discrepancies", {"limit": "not a number"})
+
+    assert "error" in result
+    assert "ValueError" in result["error"]
