@@ -169,7 +169,7 @@ run reached them through `group_by(dimension='sku')` instead. That instability
 is the symptom worth reading - when a question has no tool that answers it
 directly, the model improvises, and improvisation is neither cheap nor
 repeatable. A `direction` argument on `top_discrepancies` would collapse all of
-this into one call. See the last section.
+this into one call. It is the first item on the roadmap for that reason.
 
 **3. An overview question**
 
@@ -320,43 +320,70 @@ delivered in two shipments under the same identifier, and one blank delivery
 date. The join key is `order_id` plus `sku`, because one order can contain
 several products - and one of the sample orders does.
 
-## What I'd do differently
+## Roadmap
 
-**Let `top_discrepancies` take a direction.** It ranks by absolute size, so
-shortfalls and surpluses compete in one list. Ask for the biggest shortfalls and
-the model gets a surplus in the results, notices, and rebuilds the ranking out
-of two `filter_records` calls - three extra round trips for something a
-`direction="shortfall" | "surplus" | "any"` argument would have answered in
-one. The model worked around a hole in the tool API, which is the most common
-way an agent gets slow: the fix belongs in the schema, not in the prompt.
+### Done since the first version
 
-**Filter the ranking tools the way `group_by` can be filtered.**
-`top_discrepancies` covers the whole dataset and `group_by` takes a date range,
-so *the biggest shortfalls in September* still has no single call that answers
-it. Consistency between tools is part of the schema being usable.
+**A grouping tool.** `group_by` was the first entry in the list below. What
+moved it up was a `--verbose` trace of *which customer has the worst
+discrepancies?*: the model was calling `filter_records` once per customer,
+seven iterations deep and still only three customers in, because nothing in
+the schema could aggregate. It was compensating for a hole in the tool API.
+With `group_by(dimension, sort_by, date range)` the same question takes two
+calls, and *which customers under-delivered in September* went from four to
+two. The numbers were identical before and after - only the route changed.
 
-**Make the date comparison tolerant.** A delivery one day late and a delivery
-thirty days late are both `DATE_MISMATCH`. A real reconciliation has a tolerance
-window, and lateness should be rankable the way quantity is.
+**A conversation mode.** `chat` keeps the history so follow-ups resolve, and
+the interesting part is what it throws away. Each finished exchange is
+compacted to the question and the answer; the tool traffic behind it is
+dropped. That traffic is the bulk of the history and is stale by the next
+question, while the talking is short and is what *them* or *that order* refers
+back to. A long conversation therefore costs about what a short one does.
 
-**Reconsider one status per line.** A line that is both short and late is
+**An agent that explains itself.** This one was never on the list. It came from
+watching someone open the program and not know what to type. Asking *what is
+this and what can you tell me?* now gets the real customers, the real period
+and an explicit account of what the data does not contain. It is the one
+answer allowed without a tool, and the prompt says why, so the exception
+cannot quietly widen.
+
+### Next, in the order I would do them
+
+**1. Let `top_discrepancies` take a direction.** It ranks by absolute size, so
+shortfalls and surpluses compete in one list. Ask for the biggest shortfalls
+and the model gets a surplus in the results, notices, and reassembles the
+ranking out of whatever else is available - by a different route on each run.
+A `direction="shortfall" | "surplus" | "any"` argument answers it in one call.
+This is first because the evidence for it is already in a trace, the same way
+`group_by`'s was.
+
+**2. Write an eval set for tool selection.** The tests cover what the tools do,
+not whether the model picks the right one. That needs a fixture of questions
+paired with the calls they should produce, run against the schemas. It is
+second because everything below changes tool descriptions, and right now
+nothing catches a description edit that quietly makes the model choose worse.
+
+**3. Filter the ranking tools the way `group_by` can be filtered.**
+`top_discrepancies` covers the whole dataset while `group_by` takes a date
+range, so *the biggest shortfalls in September* still has no single call that
+answers it. Consistency between tools is part of a schema being usable.
+
+**4. Make the date comparison tolerant.** A delivery one day late and one
+thirty days late are both `DATE_MISMATCH`. A real reconciliation has a
+tolerance window, and lateness should be rankable the way quantity is.
+
+**5. Reconsider one status per line.** A line that is both short and late is
 reported as `QTY_MISMATCH`; the slip survives in `date_diff_days`, but the
 headline hides it. A list of statuses would be more honest, at the cost of a
 column that is harder to filter on.
 
-**Write an eval set for tool selection.** The tests cover what the tools do, not
-whether the model picks the right one. What that needs is a fixture of
-questions paired with the calls they should produce, run against the schemas -
-which is also the thing that makes the tool descriptions safe to edit.
+**6. Measure what the history compaction costs.** Dropping the tool results
+between questions rests on an argument - a stale result is worth less than the
+tokens it occupies - that is reasonable and untested. The way to know is the
+same eval harness as item 2, pointed at follow-up questions answered with and
+without the pruning.
 
-**Cache the comparison across runs.** It is recomputed on every invocation.
-Fine for 31 rows, wasteful for a real extract; parquet next to the CSVs with a
-staleness check would fix it. `chat` already reuses one comparison for a whole
-session, so the waste is per session rather than per question.
-
-**Measure what the history compaction costs.** `chat` keeps the questions and
-answers and throws the tool results away, on the argument that a stale tool
-result is worth less than the tokens it occupies. That is a reasonable argument
-and an untested one. The way to know is a set of follow-up questions answered
-with and without the pruning, compared - which is the same eval harness as
-above, pointed at a different question.
+**7. Cache the comparison across runs.** It is recomputed on every invocation.
+Fine for 31 rows, wasteful for a real extract; parquet beside the CSVs with a
+staleness check would fix it. Last because `chat` already reuses one comparison
+for a whole session, so the waste is now per session rather than per question.
