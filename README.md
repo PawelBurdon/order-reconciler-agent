@@ -441,3 +441,7 @@ without the pruning.
 Fine for 31 rows, wasteful for a real extract; parquet beside the CSVs with a
 staleness check would fix it. Last because `chat` already reuses one comparison
 for a whole session, so the waste is now per session rather than per question.
+
+## License
+
+MIT - see [LICENSE](LICENSE).
