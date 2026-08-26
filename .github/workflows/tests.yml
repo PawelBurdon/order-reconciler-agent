@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The readme claims Python 3.11 or newer. Running the oldest and the
+        # newest supported version is what turns that into a checked claim.
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # No GEMINI_API_KEY is configured for this workflow, and none is needed.
+      # The tests build their comparison in memory, so a failure here is a
+      # failure in the logic rather than a quota or a network problem.
+      - name: Run tests
+        run: python -m pytest -q
+
+      # The report command is the half of the project that must keep working
+      # without a key, a model or a network. Running it in a job that has no
+      # key is the only way to be sure that stays true.
+      - name: Build the Excel report without an API key
+        run: python -m src.main report --output report.xlsx

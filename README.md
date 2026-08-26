@@ -240,7 +240,10 @@ python -m pytest
 ```
 
 They make no API calls: the tool tests build a comparison in memory and inject
-it, so the suite runs without a key.
+it, so the suite runs without a key. The same suite runs in GitHub Actions on
+Python 3.11 and 3.13, in a job with no key configured - which also builds the
+Excel report, so the claim that half of this project works without the AI is
+checked on every push rather than merely written down here.
 
 ### The sample data
 
