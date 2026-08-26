@@ -288,6 +288,14 @@ Or keep the conversation open, so follow-up questions work:
 python -m src.main chat
 ```
 
+Somebody opening this for the first time does not know what it holds, so the
+agent will explain itself. Ask *what is this and what can you tell me?* and it
+describes the two files, the five statuses, the customers and period actually
+present in your data, and what it cannot answer - there is no price, supplier
+or stock information here, and it only reads. That is the single thing it is
+allowed to answer without calling a tool, because it is a fact about the
+program rather than a fact about the orders.
+
 Both commands accept `--planned` and `--actual` to point at your own CSV files
 instead of `sample_data/`.
 

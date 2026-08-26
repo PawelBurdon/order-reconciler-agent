@@ -152,9 +152,13 @@ def _run_ask(arguments: argparse.Namespace) -> int:
 
 
 CHAT_BANNER = """\
-Ask about the order data. Each question can build on the previous one.
-The questions and answers are kept; the tool results behind them are not, so
-the conversation does not get more expensive the longer it runs.
+Ask about the difference between the orders that were planned and the orders
+that actually arrived. Each question can build on the previous one, so "and
+what went wrong for them?" works.
+
+Not sure what to ask? Ask the agent - "what is this and what can you tell me?"
+is a perfectly good first question, and it will answer with the customers and
+the period that are actually in your files.
 
   /reset   forget the conversation so far
   /exit    quit (Ctrl+C works too)
