@@ -17,6 +17,7 @@ do not fail the run - see evals/cases.py for why.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from pathlib import Path
@@ -194,6 +195,15 @@ def _score(entry: EvalCase, calls: list[dict], answer: str) -> list[Check]:
             Check(GROUNDING, bool(hit), "answer says the data cannot answer this")
         )
 
+    for pattern in entry.expect_answer_matches:
+        checks.append(
+            Check(
+                GROUNDING,
+                re.search(pattern, answer, re.IGNORECASE | re.DOTALL) is not None,
+                f"answer matches /{pattern}/",
+            )
+        )
+
     for forbidden in entry.expect_not_in_answer:
         checks.append(
             Check(
@@ -250,6 +260,19 @@ def _report(results: list[dict]) -> int:
             print(f"    {check.dimension}: {check.detail}")
         if broken and entry.known_gap:
             print(f"    known gap: {entry.known_gap}")
+
+        # A failure nobody can diagnose is a failure that gets ignored. In CI
+        # there is no way to re-run this by hand with --verbose, so the answer
+        # and the calls that produced it are printed with the failure. The
+        # first question about a red eval is whether the model was wrong or
+        # the assertion was, and that cannot be answered without them.
+        if broken:
+            for call in result["calls"]:
+                arguments = ", ".join(
+                    f"{key}={value!r}" for key, value in call["arguments"].items()
+                )
+                print(f"      -> {call['name']}({arguments})")
+            print(f'      answer: {result["answer"]}')
 
     total = len(results)
     print(

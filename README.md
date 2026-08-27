@@ -99,7 +99,7 @@ Six functions are declared to the model. It never sees anything else.
 | `load_and_compare()` | Reads both files and reconciles them. Reports the real customer names, the valid statuses and the period covered, so later calls use values that exist. |
 | `get_summary()` | Aggregate figures for the whole comparison: lines matched, lines differing, the breakdown by status, planned against actual units, total under- and over-delivery. |
 | `filter_records(customer, status, date_from, date_to)` | Totals computed over every matching line, plus at most 20 example rows. All arguments optional, combined with AND. |
-| `top_discrepancies(by, limit)` | The largest deviations from the plan, ranked by absolute size. `by` is `qty_diff` or `qty_diff_pct`. |
+| `top_discrepancies(by, limit, direction)` | The largest deviations from the plan. `by` is `qty_diff` or `qty_diff_pct`; `direction` narrows to `shortfall` or `surplus`, or ranks both together by size. |
 | `group_by(dimension, sort_by, date_from, date_to, limit)` | Every customer, SKU or status as its own group with its own totals, worst first. |
 | `generate_report(output_path)` | Writes the three-sheet Excel file and returns the path. |
 
@@ -191,39 +191,43 @@ September filter - it is matched on the date it was promised for instead.
 ```
 $ python -m src.main ask "top 5 largest shortfalls"
 
-The top 5 largest shortfalls (by volume of missing units) across the 2025-07-03
-to 2025-09-25 period are:
+The 5 largest shortfalls by volume across the period from July 3, 2025, to
+September 25, 2025, are:
 
-1. Alpine Gear Co (Order ORD-1028, SKU TYR-8008): 280 units short (100% missing,
-   status MISSING_ACTUAL with a planned date of 2025-09-19).
-2. Summit Bike Supply (Order ORD-1007, SKU DRL-7007): 75 units short (100%
-   missing, status MISSING_ACTUAL with a planned date of 2025-07-21).
-3. Crankset Supply Inc (Order ORD-1023, SKU CHN-2002): 60 units short (28.6%
-   shortfall, status QTY_MISMATCH delivered on 2025-09-03).
-4. Summit Bike Supply (Order ORD-1025, SKU HDL-4004): 45 units short (52.9%
-   shortfall, status QTY_MISMATCH delivered on 2025-09-09).
-5. Alpine Gear Co (Order ORD-1010, SKU CBL-1010): 40 units short (8.0%
-   shortfall, status QTY_MISMATCH delivered on 2025-07-30).
+1. Alpine Gear Co (Order ORD-1028, SKU TYR-8008): A shortfall of 280 units
+   (100% missing, planned for September 19, 2025).
+2. Summit Bike Supply (Order ORD-1007, SKU DRL-7007): A shortfall of 75 units
+   (100% missing, planned for July 21, 2025).
+3. Crankset Supply Inc (Order ORD-1023, SKU CHN-2002): A shortfall of 60 units
+   (actual delivery of 150 units against 210 planned on September 3, 2025).
+4. Summit Bike Supply (Order ORD-1025, SKU HDL-4004): A shortfall of 45 units
+   (actual delivery of 40 units against 85 planned on September 9, 2025).
+5. Alpine Gear Co (Order ORD-1010, SKU CBL-1010): A shortfall of 40 units
+   (actual delivery of 460 units against 500 planned on July 30, 2025).
 ```
 
-This one exposes a gap in the tools rather than in the model. `top_discrepancies`
-ranks by absolute size, so its top five contains a surplus of 300 units from an
-unplanned delivery - a large deviation, but not a shortfall. The model notices,
-and then has to assemble the ranking out of whatever else is available:
-
 ```
-[iteration 2]  -> top_discrepancies(limit=5, by='qty_diff')
-[iteration 3]  -> filter_records(status='MISSING_ACTUAL')
-[iteration 4]  -> group_by(dimension='status', sort_by='under_delivered_qty')
-[iteration 5]  -> filter_records(status='QTY_MISMATCH')
+[iteration 1]  -> load_and_compare()
+[iteration 2]  -> top_discrepancies(direction='shortfall', limit=5, by='qty_diff')
 ```
 
-The five numbers come out the same on every run. The route does not: another
-run reached them through `group_by(dimension='sku')` instead. That instability
-is the symptom worth reading - when a question has no tool that answers it
-directly, the model improvises, and improvisation is neither cheap nor
-repeatable. A `direction` argument on `top_discrepancies` would collapse all of
-this into one call. It is the first item on the roadmap for that reason.
+Two calls - but this example earns its place because until recently it took
+five, or seven, depending on the run.
+
+`top_discrepancies` used to rank by absolute size and nothing else. Its top
+five therefore contained a 300-unit surplus from an unplanned delivery: a large
+deviation, but not a shortfall. The model noticed every time, and went off to
+rebuild the ranking from whatever else was to hand - `filter_records` per
+status on one run, `group_by(dimension='sku')` on the next. The five figures
+came out right every time. The number of calls did not, and that instability
+was the real signal: a question the schema cannot express gets improvised, and
+improvisation does not repeat.
+
+The fix was a `direction` argument, not a better prompt. The model had been
+choosing correctly all along - it was choosing among tools that could not say
+what it needed. It now reaches for `direction='shortfall'` unprompted, and the
+eval case guarding this has come in at two calls on three consecutive runs. The
+before and after are in the evaluation section.
 
 **3. An overview question**
 
@@ -322,46 +326,73 @@ python -m evals.runner --case worst_customer --verbose
 Evaluating 9 cases against gemini-3.5-flash-lite
 
 overview               pass   5/5 checks   2 calls
-worst_customer         pass   4/4 checks   3 calls
+worst_customer         pass   4/4 checks   2 calls
 customers_in_month     pass   5/5 checks   2 calls
-biggest_shortfalls     GAP    6/7 checks   7 calls
-    efficiency: 7 calls, at most 3 allowed
-    known gap: top_discrepancies has no direction argument; roadmap item 1.
+biggest_shortfalls     pass   7/7 checks   2 calls
 unplanned              pass   4/4 checks   2 calls
 report                 pass   3/3 checks   2 calls
-unknown_customer       pass   3/3 checks   2 calls
+unknown_customer       pass   4/4 checks   2 calls
 out_of_scope           pass   5/5 checks   1 calls
 self_description       pass   3/3 checks   1 calls
 
-9/9 cases passed, 1 known gap(s).
+9/9 cases passed.
   selection   7/7
-  efficiency  8/9
-  grounding   23/23
+  efficiency  9/9
+  grounding   24/24
 ```
 
 Splitting the score by dimension is what makes that readable. Grounding is
-23/23 - across nine questions, including one about a company that does not
+24/24 - across nine questions, including one about a company that does not
 exist and one about a column that does not exist, no figure was invented.
-Selection is 7/7 - the right tool every time. The single miss is efficiency,
-and it is the known gap: seven calls to assemble a ranking the schema cannot
-express in one. A single overall percentage would have blurred a clean result
-and a specific, already-diagnosed weakness into the same number.
+Selection is 7/7, and efficiency is 9/9: every question answered within its
+call budget, none of them taking more than two. A single overall percentage
+would say none of that, and would have hidden the run where it was not true.
 
-Running the same set again is its own small result. Every stable figure
-reproduces exactly - the same score, the same call counts on eight of the nine
-cases. The ninth moves: `biggest_shortfalls` has cost seven calls and five. A
-question the schema answers directly gets answered the same way twice; a
-question it cannot gets improvised, and improvisation is not repeatable. That
-variance is the gap making itself visible.
+### What it has actually caught
 
-Two of the nine cases are worth pointing at. `unknown_customer` asks about a
-company that is not in the data and `out_of_scope` asks for a figure the files
-do not contain - the failure being watched for there is not a wrong answer but
-a confident one. And `biggest_shortfalls` is marked as a known gap: it is run
-and reported, but does not fail the build, because the reason it takes too many
-calls is item 1 on the roadmap. Its call budget is already set to the number it
-should reach once that lands, so closing the gap will be a measurement rather
-than a claim.
+Two things, neither of which a person reading the answers would have noticed.
+
+**A ranking that improvised.** Before `top_discrepancies` took a direction,
+`biggest_shortfalls` cost five calls on one run and seven on the next, arriving
+at the same five correct figures by a different route each time. The answer was
+never wrong, so nothing looked broken. The variance was the signal, and it is
+what item 1 of the roadmap was, and why it went first.
+
+**An order id quietly corrupted.** On one run the `unplanned` case answered:
+*order `ORD-1000` (SKU CBL-1010) for Northwind Cycles arrived with 300
+unplanned units on 2025-09-25*. Everything in that sentence is right except the
+identifier - the order is `ORD-1090`, and the correct value was sitting in the
+tool result the model was reading from. An answer that is right about the
+quantity, the product, the customer and the date passes a human review; this
+one would have sent somebody looking for an order that does not exist. It
+appeared roughly once in five runs, which is exactly the failure rate that no
+amount of trying things by hand will find.
+
+The system prompt now tells the model to copy identifiers character for
+character rather than retype them, and the case has passed every run since -
+which at that rate is encouraging rather than conclusive. The value here is not
+the fix. It is that a recurrence will be visible instead of silent.
+
+That second finding also improved the harness: a failing case now prints the
+answer and the calls that produced it. A red eval in CI that cannot be
+diagnosed without re-running it by hand is one nobody diagnoses, and the first
+question to ask of any failure is whether the model was wrong or the assertion
+was. It was worth asking - the `unknown_customer` case failed once on a badly
+written assertion of my own, which had been matching a sentence about pricing
+instead of the sentence about the customer.
+
+Two of the nine cases are worth pointing at: `unknown_customer` asks about a
+company that is not in the data, `out_of_scope` asks for a figure the files do
+not contain. The failure being watched for in both is not a wrong answer but a
+confident one.
+
+A case can also be marked as a known gap, in which case it runs and is reported
+but does not fail the build. `biggest_shortfalls` carried that mark while the
+tool API could not express its question, with its call budget already set to
+the number the fix was supposed to reach - so closing the gap produced a
+measurement rather than a claim. The mark is gone now and the budget is live.
+A red build for something already written down in the roadmap teaches nobody
+anything; a red build for a regression is the point.
 
 The figures the cases expect are not typed in and trusted. `tests/test_evals.py`
 recomputes each of them from the sample data with pandas and compares, so
@@ -502,6 +533,15 @@ dropped. That traffic is the bulk of the history and is stale by the next
 question, while the talking is short and is what *them* or *that order* refers
 back to. A long conversation therefore costs about what a short one does.
 
+**A direction on the ranking tool.** The first item to be promoted off the list
+below by a number rather than a hunch. `top_discrepancies` ranked by absolute
+size, so "the biggest shortfalls" returned a surplus at the top and the model
+spent five to seven calls - a different route each run - assembling the answer
+from other tools. A `direction` argument closed it: the eval case came in at
+two calls, three runs in a row, with the model finding the argument on its own.
+The measurement existed before the fix did, which is the only reason the
+improvement is a fact rather than an impression.
+
 **An eval set for tool selection.** The tests could say the tools were correct
 and nothing could say the model still chose them well. Nine cases now score
 selection, efficiency and grounding separately, the figures they expect are
@@ -519,36 +559,27 @@ cannot quietly widen.
 
 ### Next, in the order I would do them
 
-**1. Let `top_discrepancies` take a direction.** It ranks by absolute size, so
-shortfalls and surpluses compete in one list. Ask for the biggest shortfalls
-and the model gets a surplus in the results, notices, and reassembles the
-ranking out of whatever else is available - by a different route on each run.
-A `direction="shortfall" | "surplus" | "any"` argument answers it in one call.
-This is first because it is the only item whose payoff is already measured: the
-`biggest_shortfalls` eval case spends five to seven calls against a budget of
-three, and both the budget and the variance are what the fix should remove.
-
-**2. Filter the ranking tools the way `group_by` can be filtered.**
+**1. Filter the ranking tools the way `group_by` can be filtered.**
 `top_discrepancies` covers the whole dataset while `group_by` takes a date
 range, so *the biggest shortfalls in September* still has no single call that
 answers it. Consistency between tools is part of a schema being usable.
 
-**3. Make the date comparison tolerant.** A delivery one day late and one
+**2. Make the date comparison tolerant.** A delivery one day late and one
 thirty days late are both `DATE_MISMATCH`. A real reconciliation has a
 tolerance window, and lateness should be rankable the way quantity is.
 
-**4. Reconsider one status per line.** A line that is both short and late is
+**3. Reconsider one status per line.** A line that is both short and late is
 reported as `QTY_MISMATCH`; the slip survives in `date_diff_days`, but the
 headline hides it. A list of statuses would be more honest, at the cost of a
 column that is harder to filter on.
 
-**5. Measure what the history compaction costs.** Dropping the tool results
+**4. Measure what the history compaction costs.** Dropping the tool results
 between questions rests on an argument - a stale result is worth less than the
 tokens it occupies - that is reasonable and untested. The way to know is the
 eval harness above, pointed at follow-up questions answered with and
 without the pruning.
 
-**6. Cache the comparison across runs.** It is recomputed on every invocation.
+**5. Cache the comparison across runs.** It is recomputed on every invocation.
 Fine for 31 rows, wasteful for a real extract; parquet beside the CSVs with a
 staleness check would fix it. Last because `chat` already reuses one comparison
 for a whole session, so the waste is now per session rather than per question.

@@ -166,19 +166,44 @@ def filter_records(
     }
 
 
+# Ranking by size alone puts a missing delivery and an unrequested one in the
+# same list. Both are large deviations; only one of them is a shortfall.
+TOP_DIRECTIONS = ["shortfall", "surplus", "any"]
+
+
 @_tool
-def top_discrepancies(by: str = "qty_diff", limit: int = 5) -> dict:
-    """Rank the biggest deviations from the plan."""
+def top_discrepancies(
+    by: str = "qty_diff", limit: int = 5, direction: str = "any"
+) -> dict:
+    """Rank the biggest deviations from the plan, optionally in one direction.
+
+    The direction argument exists because of a measurement. Without it, asking
+    for the biggest shortfalls returned a ranking by absolute size, whose top
+    entry was a 300-unit surplus. The model noticed and rebuilt the ranking out
+    of other tools - correctly, but in five to seven calls, by a different
+    route on each run. Improvisation is what a model does when the schema
+    cannot express the question.
+    """
     if by not in {"qty_diff", "qty_diff_pct"}:
         return {
             "error": f"Unknown ranking column '{by}'.",
             "valid_values": ["qty_diff", "qty_diff_pct"],
+        }
+    if direction not in TOP_DIRECTIONS:
+        return {
+            "error": f"Unknown direction '{direction}'.",
+            "valid_values": TOP_DIRECTIONS,
         }
 
     comparison = _require_comparison()
     limit = max(1, min(int(limit), MAX_RECORDS_RETURNED))
 
     ranked = comparison[comparison["qty_diff"].fillna(0) != 0]
+    if direction == "shortfall":
+        ranked = ranked[ranked["qty_diff"] < 0]
+    elif direction == "surplus":
+        ranked = ranked[ranked["qty_diff"] > 0]
+
     excluded_without_baseline = 0
     if by == "qty_diff_pct":
         # A line that was never planned has no baseline, so a percentage of the
@@ -192,6 +217,7 @@ def top_discrepancies(by: str = "qty_diff", limit: int = 5) -> dict:
 
     return {
         "ranked_by": f"absolute {by}, descending",
+        "direction": direction,
         "limit": limit,
         "returned": len(ranked),
         "excluded_without_baseline": excluded_without_baseline,
@@ -497,10 +523,12 @@ TOOL_DECLARATIONS: list[types.FunctionDeclaration] = [
         name="top_discrepancies",
         description=(
             "Rank the order lines with the largest deviation from the plan and "
-            "return the worst ones. Ranking is by absolute size, so shortfalls and "
-            "surpluses compete on the same scale; the sign of qty_diff tells them "
-            "apart (negative means under-delivered). Use this for 'the biggest', "
-            "'the worst' or 'top N' questions. Cannot be filtered by customer or "
+            "return the worst ones. Use this for 'the biggest', 'the worst' or "
+            "'top N' questions, and set direction to match what was asked: a "
+            "question about shortfalls, missing units or under-delivery wants "
+            "direction='shortfall'. This matters - with the default the two "
+            "kinds compete on size alone, so a large over-delivery can outrank "
+            "every shortfall in the list. Cannot be filtered by customer or "
             "period - for that use filter_records."
         ),
         parameters=types.Schema(
@@ -515,6 +543,19 @@ TOOL_DECLARATIONS: list[types.FunctionDeclaration] = [
                         "worst-served orders regardless of their size."
                     ),
                     enum=["qty_diff", "qty_diff_pct"],
+                ),
+                "direction": types.Schema(
+                    type=types.Type.STRING,
+                    description=(
+                        "'shortfall' keeps only lines where fewer units arrived "
+                        "than were planned - use it for shortfalls, missing "
+                        "units, under-delivery, or 'who let us down'. 'surplus' "
+                        "keeps only over-deliveries. 'any' ranks both together "
+                        "by size and is the default; use it only when the "
+                        "question really is about deviation in either "
+                        "direction."
+                    ),
+                    enum=list(TOP_DIRECTIONS),
                 ),
                 "limit": types.Schema(
                     type=types.Type.INTEGER,

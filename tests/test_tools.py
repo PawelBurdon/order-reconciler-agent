@@ -198,6 +198,42 @@ def test_top_discrepancies_limit_is_capped(wide_dataset):
     assert result["returned"] == tools.MAX_RECORDS_RETURNED
 
 
+def test_direction_shortfall_drops_the_surplus(small_dataset):
+    """The whole point: ORD-6 is the largest deviation but not a shortfall."""
+    result = tools.top_discrepancies(by="qty_diff", direction="shortfall", limit=3)
+
+    order_ids = [record["order_id"] for record in result["records"]]
+    assert "ORD-6" not in order_ids
+    assert order_ids == ["ORD-5", "ORD-4", "ORD-2"]
+    assert all(record["qty_diff"] < 0 for record in result["records"])
+
+
+def test_direction_surplus_keeps_only_over_deliveries(small_dataset):
+    result = tools.top_discrepancies(by="qty_diff", direction="surplus")
+
+    assert [record["order_id"] for record in result["records"]] == ["ORD-6"]
+    assert result["records"][0]["qty_diff"] == 300
+
+
+def test_direction_defaults_to_ranking_both_together(small_dataset):
+    """Unchanged behaviour when the question is not about a direction."""
+    result = tools.top_discrepancies(by="qty_diff", limit=3)
+
+    assert [record["order_id"] for record in result["records"]] == [
+        "ORD-6",
+        "ORD-5",
+        "ORD-4",
+    ]
+    assert result["direction"] == "any"
+
+
+def test_unknown_direction_returns_an_error(small_dataset):
+    result = tools.top_discrepancies(direction="downwards")
+
+    assert "error" in result
+    assert result["valid_values"] == ["shortfall", "surplus", "any"]
+
+
 def test_unknown_ranking_column_returns_an_error(small_dataset):
     result = tools.top_discrepancies(by="delivery_delay")
 

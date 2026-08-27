@@ -11,6 +11,8 @@ the deterministic layer actually produces. If someone edits the sample data,
 these fail here rather than looking like the model got worse.
 """
 
+import re
+
 import pytest
 
 from evals.cases import CASES, EvalCase
@@ -70,7 +72,40 @@ def test_every_case_asserts_something(entry: EvalCase):
         or entry.expect_in_answer
         or entry.expect_any_in_answer
         or entry.expect_not_in_answer
+        or entry.expect_answer_matches
     ), f"{entry.id} would pass no matter what the model did"
+
+
+@pytest.mark.parametrize("entry", CASES, ids=lambda entry: entry.id)
+def test_every_pattern_compiles(entry: EvalCase):
+    """A broken regex must fail here, not halfway through a billed eval run."""
+    for pattern in entry.expect_answer_matches:
+        re.compile(pattern)
+
+
+def test_the_unknown_customer_pattern_reads_denials_and_rejects_inventions():
+    """The regex is the assertion, so it gets its own test.
+
+    Three of these are real answers the model has given; the last is the
+    fabrication the case exists to catch.
+    """
+    pattern = case("unknown_customer").expect_answer_matches[0]
+
+    accepted = [
+        'I can help you analyze the data, but "Acme Corp" is not in the dataset.',
+        "We do not have any orders or records for Acme Corp in the system.",
+        "The data does not contain any orders from Acme Corp.",
+    ]
+    rejected = [
+        "Acme Corp under-delivered by 40 units across two order lines.",
+        # A denial about something else must not satisfy a denial about Acme.
+        "Acme Corp ordered 120 units. The data does not include pricing.",
+    ]
+
+    for answer in accepted:
+        assert re.search(pattern, answer, re.IGNORECASE | re.DOTALL), answer
+    for answer in rejected:
+        assert not re.search(pattern, answer, re.IGNORECASE | re.DOTALL), answer
 
 
 @pytest.mark.parametrize("entry", CASES, ids=lambda entry: entry.id)

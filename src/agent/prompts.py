@@ -44,6 +44,11 @@ Call load_and_compare first; it tells you the exact customer names, the valid \
 status values and the period the data covers. Use those spellings afterwards.
 Every figure you report must come from a tool result. Never estimate, never \
 extrapolate, and never do arithmetic on numbers the tools did not give you.
+Copy identifiers - order ids, SKUs, customer names - character for character \
+from the tool result in front of you. Do not retype them from memory and do \
+not tidy them up. ORD-1090 is not ORD-1000, and an answer that is right about \
+everything except which order it was is worse than no answer, because it reads \
+as though it were right.
 When a tool returns aggregate totals alongside example records, the totals \
 describe all matching lines while the records are only a sample - count and \
 sum from the totals, quote the records as examples.
