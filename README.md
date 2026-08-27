@@ -347,6 +347,13 @@ and it is the known gap: seven calls to assemble a ranking the schema cannot
 express in one. A single overall percentage would have blurred a clean result
 and a specific, already-diagnosed weakness into the same number.
 
+Running the same set again is its own small result. Every stable figure
+reproduces exactly - the same score, the same call counts on eight of the nine
+cases. The ninth moves: `biggest_shortfalls` has cost seven calls and five. A
+question the schema answers directly gets answered the same way twice; a
+question it cannot gets improvised, and improvisation is not repeatable. That
+variance is the gap making itself visible.
+
 Two of the nine cases are worth pointing at. `unknown_customer` asks about a
 company that is not in the data and `out_of_scope` asks for a figure the files
 do not contain - the failure being watched for there is not a wrong answer but
@@ -518,8 +525,8 @@ and the model gets a surplus in the results, notices, and reassembles the
 ranking out of whatever else is available - by a different route on each run.
 A `direction="shortfall" | "surplus" | "any"` argument answers it in one call.
 This is first because it is the only item whose payoff is already measured: the
-`biggest_shortfalls` eval case currently spends seven calls against a budget of
-three, and that budget is the number the fix should bring it to.
+`biggest_shortfalls` eval case spends five to seven calls against a budget of
+three, and both the budget and the variance are what the fix should remove.
 
 **2. Filter the ranking tools the way `group_by` can be filtered.**
 `top_discrepancies` covers the whole dataset while `group_by` takes a date
