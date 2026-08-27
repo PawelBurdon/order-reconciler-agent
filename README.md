@@ -595,6 +595,26 @@ dropped. That traffic is the bulk of the history and is stale by the next
 question, while the talking is short and is what *them* or *that order* refers
 back to. A long conversation therefore costs about what a short one does.
 
+**A cache that turned out to be a slow loop.** The list said the comparison
+was recomputed on every invocation and that this was wasteful on a real
+extract - asserted, never measured. Measured: 200,000 order lines took 3.8
+seconds, and a profile put 95% of that inside one function of mine, which
+walked the frame a row at a time to work out which statuses each line carried.
+The outer join underneath it cost a tenth of a second.
+
+Written with masks instead of a loop, that function went from three seconds to
+a quarter of one, and the whole comparison from 3.8 seconds to 1.6. Which
+settles the original item too: 1.6 seconds against a model that takes several,
+in exchange for a new dependency, a file to invalidate and a class of bug where
+the answer is right for data that has since changed. The cache is not worth
+building, and that is now a decision with numbers behind it rather than an
+entry nobody got to.
+
+The lesson generalises past this project. A cache would have worked. It would
+have made the symptom go away, permanently, while leaving a function that costs
+four times what it should sitting in the middle of the pipeline for whatever
+came next.
+
 **An empty result that says why it is empty.** Found by running the eval
 against a different model when the usual one had run out of quota. Asked about
 September, it guessed the year as 2023, got nothing back, and reported that no
@@ -701,10 +721,8 @@ conversations, several runs each way, on the default model - which is a quota
 problem rather than a programming one. Until then the compaction stays, on the
 strength of the number that was measured rather than the one that was not.
 
-**3. Cache the comparison across runs.** It is recomputed on every invocation.
-Fine for 31 rows, wasteful for a real extract; parquet beside the CSVs with a
-staleness check would fix it. Last because `chat` already reuses one comparison
-for a whole session, so the waste is now per session rather than per question.
+Caching the comparison used to be item 3 here. It was measured and dropped -
+see above.
 
 ## License
 

@@ -155,35 +155,45 @@ def _collect_statuses(comparison: pd.DataFrame) -> pd.Series:
     exactly what the agent did, fluently and repeatedly, until this was
     measured. The headline is still useful for a report where one word has to
     do; it is a summary, and summaries are the wrong thing to filter on.
+
+    Built with masks rather than a loop over the rows. The first version of
+    this walked the frame one row at a time and was, on a 200,000 line extract,
+    ninety-five percent of the entire comparison - three seconds where the
+    outer join underneath it took a tenth of one. The roadmap had "cache the
+    comparison" on it for that reason; profiling said the cost was here, and a
+    cache would have hidden it behind a staleness check and a new dependency.
     """
     unplanned = comparison["planned_qty"].isna()
     missing = comparison["actual_qty"].isna() & ~unplanned
-    quantity_differs = (comparison["qty_diff"] != 0) & ~unplanned & ~missing
-    date_differs = comparison["date_diff_days"].notna() & (
-        comparison["date_diff_days"] != 0
+    ordinary = ~unplanned & ~missing
+
+    quantity_differs = (comparison["qty_diff"] != 0) & ordinary
+    date_differs = (
+        comparison["date_diff_days"].notna()
+        & (comparison["date_diff_days"] != 0)
+        & ordinary
     )
 
-    collected = []
-    for position in range(len(comparison)):
-        if unplanned.iloc[position]:
-            collected.append([STATUS_UNPLANNED])
-        elif missing.iloc[position]:
-            collected.append([STATUS_MISSING_ACTUAL])
-        else:
-            entries = []
-            if quantity_differs.iloc[position]:
-                entries.append(STATUS_QTY_MISMATCH)
-            if date_differs.iloc[position]:
-                entries.append(STATUS_DATE_MISMATCH)
-            collected.append(entries or [STATUS_MATCH])
+    quantity = pd.Series("", index=comparison.index, dtype="object")
+    quantity[quantity_differs] = STATUS_QTY_MISMATCH
+    date = pd.Series("", index=comparison.index, dtype="object")
+    date[date_differs] = STATUS_DATE_MISMATCH
 
-    return pd.Series(
-        [";".join(entry) for entry in collected], index=comparison.index
-    )
+    # Joining with a separator and then stripping it handles all four
+    # combinations without a branch: neither, either, or both.
+    statuses = quantity.str.cat(date, sep=";").str.strip(";")
+    statuses[statuses == ""] = STATUS_MATCH
+    statuses[missing] = STATUS_MISSING_ACTUAL
+    statuses[unplanned] = STATUS_UNPLANNED
+    return statuses
 
 
 def _headline_status(statuses: pd.Series) -> pd.Series:
-    """Reduce the list to the single status a one-word column can show."""
+    """Reduce the list to the single status a one-word column can show.
+
+    There are only a handful of distinct combinations however many lines there
+    are, so the choice is made once per combination and then looked up.
+    """
 
     def pick(joined: str) -> str:
         entries = joined.split(";")
@@ -192,7 +202,7 @@ def _headline_status(statuses: pd.Series) -> pd.Series:
                 return candidate
         return STATUS_MATCH
 
-    return statuses.map(pick)
+    return statuses.map({value: pick(value) for value in statuses.unique()})
 
 
 def _collect_flags(comparison: pd.DataFrame) -> pd.Series:
