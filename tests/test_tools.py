@@ -227,6 +227,24 @@ def test_direction_defaults_to_ranking_both_together(small_dataset):
     assert result["direction"] == "any"
 
 
+def test_top_discrepancies_honours_a_date_range(small_dataset):
+    """Ranking and filtering in one call, so nothing has to be intersected."""
+    result = tools.top_discrepancies(
+        by="qty_diff", direction="shortfall", date_from="2025-09-01"
+    )
+
+    # ORD-2, the August shortfall, is larger than ORD-4 but outside the period.
+    assert [record["order_id"] for record in result["records"]] == ["ORD-5", "ORD-4"]
+    assert result["filters_applied"] == {"date_from": "2025-09-01"}
+
+
+def test_top_discrepancies_rejects_a_bad_date(small_dataset):
+    result = tools.top_discrepancies(date_from="last September")
+
+    assert "error" in result
+    assert "YYYY-MM-DD" in result["error"]
+
+
 def test_unknown_direction_returns_an_error(small_dataset):
     result = tools.top_discrepancies(direction="downwards")
 

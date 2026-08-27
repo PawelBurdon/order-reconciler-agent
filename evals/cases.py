@@ -101,6 +101,24 @@ CASES: list[EvalCase] = [
         expect_in_answer=["280", "75", "60", "45", "40"],
     ),
     EvalCase(
+        id="shortfalls_in_month",
+        question="what were the biggest shortfalls in September?",
+        tests="A ranking and a date range in one question. Measured before "
+        "top_discrepancies took a date range, this cost three calls: one for "
+        "the month, one for the ranking, and an intersection performed in the "
+        "model's head. It got that right every run, which was the argument for "
+        "the fix rather than against it - correctness should not depend on the "
+        "model being careful. The budget of two is the version that cannot be "
+        "got wrong.",
+        expect_tools=["top_discrepancies"],
+        max_calls=2,
+        expect_in_answer=["280", "60", "45"],
+        # July shortfalls. Their presence would mean the period was ignored,
+        # which is the failure that matters here - the figures would all be
+        # real, just answering a different question than the one asked.
+        expect_not_in_answer=["ORD-1007", "ORD-1010"],
+    ),
+    EvalCase(
         id="unplanned",
         question="did anything arrive that nobody ordered?",
         tests="A status the user names in their own words rather than in the "

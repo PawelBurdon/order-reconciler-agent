@@ -173,7 +173,11 @@ TOP_DIRECTIONS = ["shortfall", "surplus", "any"]
 
 @_tool
 def top_discrepancies(
-    by: str = "qty_diff", limit: int = 5, direction: str = "any"
+    by: str = "qty_diff",
+    limit: int = 5,
+    direction: str = "any",
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> dict:
     """Rank the biggest deviations from the plan, optionally in one direction.
 
@@ -197,8 +201,31 @@ def top_discrepancies(
 
     comparison = _require_comparison()
     limit = max(1, min(int(limit), MAX_RECORDS_RETURNED))
+    applied: dict[str, str] = {}
 
     ranked = comparison[comparison["qty_diff"].fillna(0) != 0]
+
+    # Ranking and filtering by period used to live in different tools, so a
+    # question that wanted both - "the biggest shortfalls in September" - was
+    # answered by pulling one list from each and intersecting them in the
+    # model's head. It got that right every time it was measured. It should
+    # not have to: an intersection the schema can express is an intersection
+    # that cannot be got wrong.
+    if date_from or date_to:
+        try:
+            boundaries = _parse_date_range(date_from, date_to)
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+        dates = _effective_dates(ranked)
+        if boundaries[0] is not None:
+            ranked = ranked[dates >= boundaries[0]]
+            applied["date_from"] = date_from
+            dates = _effective_dates(ranked)
+        if boundaries[1] is not None:
+            ranked = ranked[dates <= boundaries[1]]
+            applied["date_to"] = date_to
+
     if direction == "shortfall":
         ranked = ranked[ranked["qty_diff"] < 0]
     elif direction == "surplus":
@@ -218,6 +245,7 @@ def top_discrepancies(
     return {
         "ranked_by": f"absolute {by}, descending",
         "direction": direction,
+        "filters_applied": applied,
         "limit": limit,
         "returned": len(ranked),
         "excluded_without_baseline": excluded_without_baseline,
@@ -528,8 +556,10 @@ TOOL_DECLARATIONS: list[types.FunctionDeclaration] = [
             "question about shortfalls, missing units or under-delivery wants "
             "direction='shortfall'. This matters - with the default the two "
             "kinds compete on size alone, so a large over-delivery can outrank "
-            "every shortfall in the list. Cannot be filtered by customer or "
-            "period - for that use filter_records."
+            "every shortfall in the list. Takes an optional date range, so "
+            "'the biggest shortfalls in September' is one call - do not rank "
+            "the whole dataset and narrow it yourself. Cannot be filtered by "
+            "customer; for that use filter_records."
         ),
         parameters=types.Schema(
             type=types.Type.OBJECT,
@@ -556,6 +586,18 @@ TOOL_DECLARATIONS: list[types.FunctionDeclaration] = [
                         "direction."
                     ),
                     enum=list(TOP_DIRECTIONS),
+                ),
+                "date_from": types.Schema(
+                    type=types.Type.STRING,
+                    description=(
+                        "Earliest date to include, YYYY-MM-DD. Same date rule "
+                        "as the other tools: the actual delivery date, falling "
+                        "back to the planned date for lines never delivered."
+                    ),
+                ),
+                "date_to": types.Schema(
+                    type=types.Type.STRING,
+                    description="Latest date to include, YYYY-MM-DD, inclusive.",
                 ),
                 "limit": types.Schema(
                     type=types.Type.INTEGER,

@@ -99,7 +99,7 @@ Six functions are declared to the model. It never sees anything else.
 | `load_and_compare()` | Reads both files and reconciles them. Reports the real customer names, the valid statuses and the period covered, so later calls use values that exist. |
 | `get_summary()` | Aggregate figures for the whole comparison: lines matched, lines differing, the breakdown by status, planned against actual units, total under- and over-delivery. |
 | `filter_records(customer, status, date_from, date_to)` | Totals computed over every matching line, plus at most 20 example rows. All arguments optional, combined with AND. |
-| `top_discrepancies(by, limit, direction)` | The largest deviations from the plan. `by` is `qty_diff` or `qty_diff_pct`; `direction` narrows to `shortfall` or `surplus`, or ranks both together by size. |
+| `top_discrepancies(by, limit, direction, date_from, date_to)` | The largest deviations from the plan. `by` is `qty_diff` or `qty_diff_pct`; `direction` narrows to `shortfall` or `surplus`, or ranks both together by size; the dates narrow the period. |
 | `group_by(dimension, sort_by, date_from, date_to, limit)` | Every customer, SKU or status as its own group with its own totals, worst first. |
 | `generate_report(output_path)` | Writes the three-sheet Excel file and returns the path. |
 
@@ -107,8 +107,10 @@ The descriptions in the schema are the only thing the model reads when it
 chooses, so each one says *when* to use the tool rather than only what it does,
 and the pairs that are easy to confuse name each other: `filter_records` points
 at `top_discrepancies` for "the biggest", `top_discrepancies` points back for
-"filtered by customer or period", and `group_by` says outright never to loop
-`filter_records` over customers.
+"filtered by customer", and `group_by` says outright never to loop
+`filter_records` over customers. Where two tools accept the same argument they
+describe it the same way, because a date range that means one thing in one
+schema and another elsewhere is a trap the model has no way to see.
 
 ## Why two layers
 
@@ -323,30 +325,31 @@ python -m evals.runner --case worst_customer --verbose
 ```
 
 ```
-Evaluating 9 cases against gemini-3.5-flash-lite
+Evaluating 10 cases against gemini-3.5-flash-lite
 
 overview               pass   5/5 checks   2 calls
 worst_customer         pass   4/4 checks   2 calls
 customers_in_month     pass   5/5 checks   2 calls
 biggest_shortfalls     pass   7/7 checks   2 calls
+shortfalls_in_month    pass   7/7 checks   2 calls
 unplanned              pass   4/4 checks   2 calls
 report                 pass   3/3 checks   2 calls
 unknown_customer       pass   4/4 checks   2 calls
 out_of_scope           pass   5/5 checks   1 calls
 self_description       pass   3/3 checks   1 calls
 
-9/9 cases passed.
-  selection   7/7
-  efficiency  9/9
-  grounding   24/24
+10/10 cases passed.
+  selection   8/8
+  efficiency  10/10
+  grounding   29/29
 ```
 
 Splitting the score by dimension is what makes that readable. Grounding is
-24/24 - across nine questions, including one about a company that does not
+29/29 - across ten questions, including one about a company that does not
 exist and one about a column that does not exist, no figure was invented.
-Selection is 7/7, and efficiency is 9/9: every question answered within its
+Selection is 8/8, and efficiency is 10/10: every question answered within its
 call budget, none of them taking more than two. A single overall percentage
-would say none of that, and would have hidden the run where it was not true.
+would say none of that, and would have hidden the runs where it was not true.
 
 ### What it has actually caught
 
@@ -533,6 +536,17 @@ dropped. That traffic is the bulk of the history and is stale by the next
 question, while the talking is short and is what *them* or *that order* refers
 back to. A long conversation therefore costs about what a short one does.
 
+**A date range on the ranking tool.** The item where measuring first changed
+the answer. The prediction was that "the biggest shortfalls in September" would
+be expensive, because ranking and filtering lived in different tools. It was
+not: three calls, the same route every run, the right figures every time. What
+the trace showed instead was the model pulling a month from one tool and a
+ranking from another and intersecting them in its head - getting it right, but
+by being careful rather than by construction. That is the argument for the fix,
+and it is a different argument from the one predicted: not speed, but a wrong
+answer that becomes impossible instead of merely unlikely. Three calls to two,
+and one fewer thing depending on the model paying attention.
+
 **A direction on the ranking tool.** The first item to be promoted off the list
 below by a number rather than a hunch. `top_discrepancies` ranked by absolute
 size, so "the biggest shortfalls" returned a surplus at the top and the model
@@ -559,27 +573,22 @@ cannot quietly widen.
 
 ### Next, in the order I would do them
 
-**1. Filter the ranking tools the way `group_by` can be filtered.**
-`top_discrepancies` covers the whole dataset while `group_by` takes a date
-range, so *the biggest shortfalls in September* still has no single call that
-answers it. Consistency between tools is part of a schema being usable.
-
-**2. Make the date comparison tolerant.** A delivery one day late and one
+**1. Make the date comparison tolerant.** A delivery one day late and one
 thirty days late are both `DATE_MISMATCH`. A real reconciliation has a
 tolerance window, and lateness should be rankable the way quantity is.
 
-**3. Reconsider one status per line.** A line that is both short and late is
+**2. Reconsider one status per line.** A line that is both short and late is
 reported as `QTY_MISMATCH`; the slip survives in `date_diff_days`, but the
 headline hides it. A list of statuses would be more honest, at the cost of a
 column that is harder to filter on.
 
-**4. Measure what the history compaction costs.** Dropping the tool results
+**3. Measure what the history compaction costs.** Dropping the tool results
 between questions rests on an argument - a stale result is worth less than the
 tokens it occupies - that is reasonable and untested. The way to know is the
 eval harness above, pointed at follow-up questions answered with and
 without the pruning.
 
-**5. Cache the comparison across runs.** It is recomputed on every invocation.
+**4. Cache the comparison across runs.** It is recomputed on every invocation.
 Fine for 31 rows, wasteful for a real extract; parquet beside the CSVs with a
 staleness check would fix it. Last because `chat` already reuses one comparison
 for a whole session, so the waste is now per session rather than per question.

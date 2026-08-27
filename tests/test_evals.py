@@ -161,6 +161,27 @@ def test_the_five_biggest_shortfalls_are_the_expected_five(loaded_tools):
     ).expect_in_answer
 
 
+def test_the_september_shortfalls_are_the_three_expected(loaded_tools, comparison):
+    """Both halves of the case: what must appear, and what must not."""
+    entry = case("shortfalls_in_month")
+    september = comparison[
+        comparison["actual_date"]
+        .fillna(comparison["planned_date"])
+        .between("2025-09-01", "2025-09-30")
+    ]
+    shortfalls = september[september["qty_diff"] < 0]
+
+    assert sorted(str(abs(value)) for value in shortfalls["qty_diff"]) == sorted(
+        entry.expect_in_answer
+    )
+    # The orders the case forbids must be real shortfalls from another month,
+    # otherwise forbidding them proves nothing.
+    for order_id in entry.expect_not_in_answer:
+        line = comparison[comparison["order_id"] == order_id].iloc[0]
+        assert line["qty_diff"] < 0
+        assert order_id not in set(september["order_id"])
+
+
 def test_the_unplanned_delivery_is_the_one_named(comparison):
     unplanned = comparison[comparison["status"] == STATUS_UNPLANNED]
     expected = case("unplanned").expect_in_answer
