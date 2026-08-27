@@ -87,6 +87,13 @@ calls at once; all of them are executed and all of the results travel back
 together. The loop stops after eight rounds, so a model that keeps re-calling
 the same tool fails visibly instead of quietly.
 
+Before an answer is handed back, it is checked against what the model was
+actually shown: every identifier-shaped token in it - an order id, a SKU - has
+to appear in the question, in the conversation so far, or in a tool result from
+this turn. One that does not was invented, and the model is told exactly which
+one and asked again. This exists because it happened; the evaluation section
+has the case.
+
 The SDK can run this loop for you - hand it Python callables instead of
 declarations and it calls them itself. That is switched off on purpose here.
 
@@ -371,10 +378,25 @@ one would have sent somebody looking for an order that does not exist. It
 appeared roughly once in five runs, which is exactly the failure rate that no
 amount of trying things by hand will find.
 
-The system prompt now tells the model to copy identifiers character for
-character rather than retype them, and the case has passed every run since -
-which at that rate is encouraging rather than conclusive. The value here is not
-the fix. It is that a recurrence will be visible instead of silent.
+The first attempt at a fix was a line in the system prompt telling the model to
+copy identifiers character for character. Four runs passed, which proved
+nothing at that failure rate and was described that way at the time. Two
+commits later it happened again, in CI, on the same order.
+
+A prompt is a request. So the answer is now checked before it is returned:
+every identifier-shaped token in it is looked for in the question, in what the
+model has already said, and in every tool result it received. Anything else was
+invented, and the model is told so and asked once more, quoting the token back
+to it. If the second answer still contains it, the answer carries a visible
+`[Unverified: ...]` note rather than reading cleanly. This is the same
+principle as the rest of the project, applied one step further: where Python
+can check the model, it should.
+
+Eight runs since, all clean, and the correction has not yet fired live - which
+again proves little, because eight clean runs at one-in-six are a 23% coincidence.
+What is certain is different in kind: the failure is now caught by construction
+whenever it happens, which the unit tests demonstrate against a stubbed model
+without spending a token.
 
 That second finding also improved the harness: a failing case now prints the
 answer and the calls that produced it. A red eval in CI that cannot be

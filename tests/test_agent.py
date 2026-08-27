@@ -199,6 +199,59 @@ def test_the_history_keeps_the_talking_and_drops_the_tool_traffic(build_agent):
             assert part.function_response is None
 
 
+def test_an_invented_identifier_is_sent_back_to_be_corrected(build_agent):
+    """The failure this exists for: ORD-1090 answered as ORD-1000."""
+    agent, stub = build_agent(
+        [
+            StubResponse(calls=(call("filter_records", status="UNPLANNED"),)),
+            StubResponse(text="300 units arrived under order ORD-1000."),
+            StubResponse(text="300 units arrived under order ORD-1."),
+        ]
+    )
+
+    answer = agent.ask("did anything arrive unplanned?")
+
+    assert answer == "300 units arrived under order ORD-1."
+    correction = stub.requests[-1][-1].parts[0].text
+    assert "ORD-1000" in correction
+    assert "invented an identifier" in correction
+
+
+def test_an_identifier_that_appears_in_a_tool_result_is_left_alone(build_agent):
+    agent, stub = build_agent(
+        [
+            StubResponse(calls=(call("filter_records", customer="Velo"),)),
+            StubResponse(text="ORD-1 for Velo Parts Ltd is short by 20 units."),
+        ]
+    )
+
+    assert agent.ask("what is short?") == "ORD-1 for Velo Parts Ltd is short by 20 units."
+    # Two requests, not three: nothing needed correcting.
+    assert len(stub.requests) == 2
+
+
+def test_an_identifier_from_the_question_is_not_treated_as_invented(build_agent):
+    """The user is allowed to name an order the tools never returned."""
+    agent, _ = build_agent([StubResponse(text="ORD-9999 is not in the data.")])
+
+    assert agent.ask("what happened to ORD-9999?") == "ORD-9999 is not in the data."
+
+
+def test_an_identifier_that_survives_the_correction_is_flagged(build_agent):
+    """Told once and still wrong: warn rather than answer cleanly."""
+    agent, _ = build_agent(
+        [
+            StubResponse(text="Order ORD-4242 was never delivered."),
+            StubResponse(text="Order ORD-4242 was never delivered."),
+        ]
+    )
+
+    answer = agent.ask("what is missing?")
+
+    assert "Unverified: ORD-4242" in answer
+    assert "may not exist" in answer
+
+
 def test_reset_clears_the_conversation(build_agent):
     agent, _ = build_agent([StubResponse(text="An answer.")], remember=True)
 

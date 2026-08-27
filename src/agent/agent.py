@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 from google import genai
 from google.genai import types
@@ -31,6 +32,25 @@ DEFAULT_MODEL = "gemini-3.5-flash-lite"
 # model that keeps re-calling the same tool stops burning tokens instead of
 # looping until someone notices.
 MAX_ITERATIONS = 8
+
+# Order ids and SKU codes: two or more capitals, a hyphen, digits. Anything
+# shaped like this in an answer is a thing the model is naming, and a name it
+# did not read somewhere is a name it made up.
+IDENTIFIER_PATTERN = re.compile(r"\b[A-Z]{2,5}-\d{2,8}\b")
+
+# One correction, not a loop. If the model cannot fix it when told exactly
+# what is wrong, asking again is unlikely to help and the answer should carry
+# the warning instead of hiding it.
+MAX_CORRECTIONS = 1
+
+CORRECTION_TEMPLATE = (
+    "Stop. Your answer refers to {identifiers}, which appear nowhere in the "
+    "tool results you were given. You have invented an identifier, most likely "
+    "by tidying an unusual one into a more familiar shape. Read the tool "
+    "results again and repeat the answer using the identifiers exactly as they "
+    "appear there. If you cannot find the one you meant, say so instead of "
+    "naming it."
+)
 
 
 class MissingApiKeyError(RuntimeError):
@@ -77,6 +97,15 @@ class ReconciliationAgent:
         contents.append(types.Content(role="user", parts=[types.Part(text=question)]))
         self.calls = []
 
+        # Everything the model is entitled to quote an identifier from: the
+        # question itself, anything it already said in this conversation, and
+        # every tool result it has seen while answering this one.
+        evidence: list[str] = [question]
+        evidence.extend(
+            part.text or "" for content in self.history for part in content.parts or []
+        )
+        corrections = 0
+
         for iteration in range(1, self.max_iterations + 1):
             response = self.client.models.generate_content(
                 model=self.model, contents=contents, config=self.config
@@ -87,6 +116,34 @@ class ReconciliationAgent:
                 answer = (response.text or "").strip() or (
                     "The model returned an empty answer."
                 )
+
+                invented = _invented_identifiers(answer, evidence)
+                if invented and corrections < MAX_CORRECTIONS:
+                    corrections += 1
+                    self._trace_correction(invented)
+                    contents.append(response.candidates[0].content)
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part(
+                                    text=CORRECTION_TEMPLATE.format(
+                                        identifiers=", ".join(invented)
+                                    )
+                                )
+                            ],
+                        )
+                    )
+                    continue
+
+                if invented:
+                    # Told once and still wrong. Better a visible warning than
+                    # a clean sentence pointing at an order nobody can find.
+                    answer += (
+                        f"\n\n[Unverified: {', '.join(invented)} does not appear "
+                        f"in any tool result and may not exist.]"
+                    )
+
                 self._remember_exchange(question, answer)
                 return answer
 
@@ -107,6 +164,7 @@ class ReconciliationAgent:
                 self.calls.append({"name": call.name, "arguments": arguments})
                 self._trace_call(call.name, arguments)
                 result = execute_tool(call.name, arguments)
+                evidence.append(json.dumps(result, default=str))
                 self._trace_result(result)
                 result_parts.append(
                     types.Part.from_function_response(
@@ -172,6 +230,11 @@ class ReconciliationAgent:
         rendered = ", ".join(f"{key}={value!r}" for key, value in arguments.items())
         print(f"  -> {name}({rendered})")
 
+    def _trace_correction(self, invented: list[str]) -> None:
+        if not self.verbose:
+            return
+        print(f"  !! answer named {', '.join(invented)} - asking again")
+
     def _trace_result(self, result: dict) -> None:
         if not self.verbose:
             return
@@ -179,6 +242,23 @@ class ReconciliationAgent:
         if len(payload) > 500:
             payload = payload[:500] + f"... [{len(payload)} chars total]"
         print(f"  <- {payload}")
+
+
+def _invented_identifiers(answer: str, evidence: list[str]) -> list[str]:
+    """Identifiers the answer names that nothing the model read contains.
+
+    The prompt already asks the model to copy identifiers exactly. It mostly
+    does, and then roughly once in six answers it does not: ORD-1090 came back
+    as ORD-1000 - every other figure in the sentence correct, the odd id tidied
+    into the shape of the twenty-nine others in the data. That answer survives
+    a human review and sends somebody looking for an order that does not exist.
+
+    A prompt is a request. This is the check, and it is the same principle the
+    rest of the project runs on: where Python can verify the model, it should.
+    """
+    seen = "\n".join(evidence)
+    named = dict.fromkeys(IDENTIFIER_PATTERN.findall(answer))
+    return [identifier for identifier in named if identifier not in seen]
 
 
 def _read_api_key() -> str:
