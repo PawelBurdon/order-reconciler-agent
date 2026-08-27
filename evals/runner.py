@@ -74,13 +74,19 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         agent = ReconciliationAgent(
-            model=arguments.model or DEFAULT_MODEL, verbose=arguments.verbose
+            model=arguments.model or DEFAULT_MODEL,
+            verbose=arguments.verbose,
+            # Always on: reset() isolates the cases, and the ones with
+            # follow-ups need the conversation to exist at all.
+            remember=True,
+            compact=not arguments.keep_history,
         )
     except MissingApiKeyError as error:
         print(f"Configuration error: {error}", file=sys.stderr)
         return EXIT_CONFIG_ERROR
 
-    print(f"Evaluating {len(cases)} cases against {agent.model}\n")
+    mode = "full history" if arguments.keep_history else "compacted history"
+    print(f"Evaluating {len(cases)} cases against {agent.model}, {mode}\n")
 
     results = []
     for position, entry in enumerate(cases):
@@ -110,40 +116,71 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print every tool call and the full answer for each case.",
     )
+    parser.add_argument(
+        "--keep-history",
+        action="store_true",
+        help=(
+            "Do not compact finished exchanges: keep the tool calls and their "
+            "results in the conversation. Run the set both ways to see what "
+            "the compaction costs and what it saves."
+        ),
+    )
     return parser
 
 
 def _run_case(agent: ReconciliationAgent, entry: EvalCase, verbose: bool) -> dict:
-    """Ask one question and score the answer, retrying through rate limits."""
-    agent.reset()
+    """Run one case - a question, then any follow-ups - and score the result.
 
+    Only the last answer is scored, because that is the one the exchange was
+    for. The calls are counted across every turn, so a follow-up that sends the
+    model back to the tools is paid for rather than free.
+    """
+    agent.reset()
+    calls: list[dict] = []
+    context = 0
+    answer = ""
+
+    for question in [entry.question, *entry.follow_ups]:
+        try:
+            answer = _ask_through_rate_limits(agent, question)
+        except errors.APIError as error:
+            # Anything other than a rate limit is a real problem, and so is a
+            # rate limit that will not clear. Either way the case has no
+            # result, which is reported as such rather than counted as a
+            # failure of the model.
+            return {
+                "case": entry,
+                "error": f"{getattr(error, 'code', '?')}: "
+                f"{getattr(error, 'message', error)}",
+                "checks": [],
+                "calls": [],
+                "context": 0,
+            }
+        calls.extend(agent.calls)
+        context = max(context, agent.context_chars)
+        if verbose:
+            print(f"  {question}\n  -> {answer}\n")
+
+    return {
+        "case": entry,
+        "error": None,
+        "checks": _score(entry, calls, answer),
+        "calls": calls,
+        "answer": answer,
+        "context": context,
+    }
+
+
+def _ask_through_rate_limits(agent: ReconciliationAgent, question: str) -> str:
     for attempt in range(1, RATE_LIMIT_RETRIES + 1):
         try:
-            answer = agent.ask(entry.question)
-            break
+            return agent.ask(question)
         except errors.APIError as error:
             if getattr(error, "code", None) != 429 or attempt == RATE_LIMIT_RETRIES:
-                # Anything other than a rate limit is a real problem, and so is
-                # a rate limit that will not clear. Either way the case has no
-                # result, which is reported rather than counted as a failure of
-                # the model.
-                return {
-                    "case": entry,
-                    "error": f"{getattr(error, 'code', '?')}: "
-                    f"{getattr(error, 'message', error)}",
-                    "checks": [],
-                    "calls": [],
-                }
+                raise
             print(f"  rate limited, waiting {SECONDS_AFTER_RATE_LIMIT:.0f}s")
             time.sleep(SECONDS_AFTER_RATE_LIMIT)
-
-    calls = list(agent.calls)
-    checks = _score(entry, calls, answer)
-
-    if verbose:
-        print(f"  answer: {answer}\n")
-
-    return {"case": entry, "error": None, "checks": checks, "calls": calls, "answer": answer}
+    raise AssertionError("unreachable")
 
 
 def _score(entry: EvalCase, calls: list[dict], answer: str) -> list[Check]:
@@ -292,6 +329,16 @@ def _report(results: list[dict]) -> int:
     for dimension, (good, seen) in by_dimension.items():
         if seen:
             print(f"  {dimension:<11} {good}/{seen}")
+
+    # The number the two modes are compared on. Characters, not tokens, and
+    # the largest request each case sent rather than the sum - what matters is
+    # how big the context gets, not how much went over the wire in total.
+    contexts = [result["context"] for result in results if result["context"]]
+    if contexts:
+        print(
+            f"  {'context':<11} {sum(contexts) // len(contexts):,} chars average, "
+            f"{max(contexts):,} peak"
+        )
 
     return EXIT_FAILED if failed or errored else 0
 

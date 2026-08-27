@@ -66,12 +66,21 @@ class ReconciliationAgent:
         verbose: bool = False,
         max_iterations: int = MAX_ITERATIONS,
         remember: bool = False,
+        compact: bool = True,
     ) -> None:
         self.model = model
         self.verbose = verbose
         self.max_iterations = max_iterations
         self.remember = remember
+        # Whether a finished exchange is reduced to its question and answer.
+        # False keeps the tool calls and their results too, which is what the
+        # compaction is measured against - see evals/runner.py --keep-history.
+        self.compact = compact
         self.history: list[types.Content] = []
+        # Size of the largest request sent while answering the last question,
+        # in characters. A proxy for tokens, and an honest one for comparing
+        # two runs of the same questions against each other.
+        self.context_chars = 0
         # The calls made while answering the most recent question. --verbose
         # prints them for a human; this records them for a program, which is
         # what the eval harness scores.
@@ -105,8 +114,10 @@ class ReconciliationAgent:
             part.text or "" for content in self.history for part in content.parts or []
         )
         corrections = 0
+        self.context_chars = 0
 
         for iteration in range(1, self.max_iterations + 1):
+            self.context_chars = max(self.context_chars, _measure(contents))
             response = self.client.models.generate_content(
                 model=self.model, contents=contents, config=self.config
             )
@@ -144,7 +155,7 @@ class ReconciliationAgent:
                         f"in any tool result and may not exist.]"
                     )
 
-                self._remember_exchange(question, answer)
+                self._remember_exchange(question, answer, contents)
                 return answer
 
             # The model's own turn has to go into the history before the
@@ -185,7 +196,9 @@ class ReconciliationAgent:
         """Forget the conversation so far, keeping the agent usable."""
         self.history.clear()
 
-    def _remember_exchange(self, question: str, answer: str) -> None:
+    def _remember_exchange(
+        self, question: str, answer: str, contents: list[types.Content]
+    ) -> None:
         """Keep the question and the answer; throw the tool traffic away.
 
         This is the whole of the follow-up support, and the discarding is the
@@ -203,9 +216,17 @@ class ReconciliationAgent:
         """
         if not self.remember:
             return
-        self.history.append(
-            types.Content(role="user", parts=[types.Part(text=question)])
-        )
+
+        if not self.compact:
+            # Everything that happened this turn, tool traffic included. Kept
+            # so the compaction can be measured against the alternative rather
+            # than argued for.
+            self.history.extend(contents[len(self.history) :])
+        else:
+            self.history.append(
+                types.Content(role="user", parts=[types.Part(text=question)])
+            )
+
         self.history.append(
             types.Content(role="model", parts=[types.Part(text=answer)])
         )
@@ -242,6 +263,25 @@ class ReconciliationAgent:
         if len(payload) > 500:
             payload = payload[:500] + f"... [{len(payload)} chars total]"
         print(f"  <- {payload}")
+
+
+def _measure(contents: list[types.Content]) -> int:
+    """Roughly how much text a request carries, in characters.
+
+    Not tokens, and not trying to be. It is the same undercount in both modes,
+    which is all a comparison between them needs, and it costs nothing - asking
+    the API to count tokens would spend a request to measure requests.
+    """
+    total = 0
+    for content in contents:
+        for part in content.parts or []:
+            if part.text:
+                total += len(part.text)
+            if part.function_call is not None:
+                total += len(json.dumps(dict(part.function_call.args or {}), default=str))
+            if part.function_response is not None:
+                total += len(json.dumps(part.function_response.response, default=str))
+    return total
 
 
 def _invented_identifiers(answer: str, evidence: list[str]) -> list[str]:

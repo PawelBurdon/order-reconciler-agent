@@ -35,6 +35,12 @@ class EvalCase:
     # What this case is really testing, printed in the scorecard.
     tests: str
 
+    # Asked in order after the question, on the same conversation. The
+    # assertions below apply to the last answer; the call budget covers the
+    # whole exchange. These are the cases that say anything about what the
+    # history is worth keeping.
+    follow_ups: list[str] = field(default_factory=list)
+
     # Selection.
     expect_tools: list[str] = field(default_factory=list)
     expect_any_tools: list[str] = field(default_factory=list)
@@ -170,6 +176,28 @@ CASES: list[EvalCase] = [
         expect_any_tools=["filter_records", "group_by"],
         max_calls=4,
         expect_in_answer=["ORD-1090", "300"],
+    ),
+    EvalCase(
+        id="follow_up_drilldown",
+        question="which customer has the worst discrepancies?",
+        follow_ups=["what exactly went wrong for them?"],
+        tests="A follow-up that resolves a pronoun and then needs detail the "
+        "first answer did not contain. Between the two questions the tool "
+        "results are thrown away and only the talking is kept, so the model "
+        "has to go back to the tools rather than elaborate on its own summary. "
+        "Elaborating is what a wrong answer here would look like.",
+        max_calls=5,
+        expect_in_answer=["ORD-1028", "ORD-1010", "ORD-1016"],
+    ),
+    EvalCase(
+        id="follow_up_superlative",
+        question="which customers under-delivered in September?",
+        follow_ups=["and which of them was worst?"],
+        tests="The follow-up is meaningless without the previous turn - 'them' "
+        "is the answer to the first question. The figure has to come back from "
+        "a tool, not from the model's memory of what it just said.",
+        max_calls=5,
+        expect_in_answer=["Alpine Gear Co", "280"],
     ),
     EvalCase(
         id="report",

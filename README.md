@@ -353,6 +353,10 @@ self_description       pass   3/3 checks   1 calls
   grounding   37/37
 ```
 
+That run predates the two conversation cases added for the compaction
+measurement; the set is fourteen now, and the scorecard will be refreshed the
+next time there is quota to run all of it at once.
+
 Splitting the score by dimension is what makes that readable. Grounding is
 37/37 - across twelve questions, including one about a company that does not
 exist and one about a column that does not exist, no figure was invented.
@@ -422,7 +426,13 @@ the right line because exactly one line in the data moved by four days - and a
 test guards that fact, so the day a second one does, the assertion fails loudly
 instead of quietly meaning less.
 
-Two of the twelve cases are worth pointing at: `unknown_customer` asks about a
+Two cases are conversations rather than single questions: a follow-up is asked
+on the same thread, and only the last answer is scored while the calls are
+counted across both turns. They exist because they are the only place the
+history compaction has any effect at all, and running the set with
+`--keep-history` puts the same questions the other way.
+
+Two more are worth pointing at: `unknown_customer` asks about a
 company that is not in the data, `out_of_scope` asks for a figure the files do
 not contain. The failure being watched for in both is not a wrong answer but a
 confident one.
@@ -585,6 +595,31 @@ dropped. That traffic is the bulk of the history and is stale by the next
 question, while the talking is short and is what *them* or *that order* refers
 back to. A long conversation therefore costs about what a short one does.
 
+**An empty result that says why it is empty.** Found by running the eval
+against a different model when the usual one had run out of quota. Asked about
+September, it guessed the year as 2023, got nothing back, and reported that no
+customer had under-delivered - true of September 2023, and not the question. An
+empty result is ambiguous between "nothing went wrong then" and "there is no
+then", and only one of those is worth telling somebody. Every tool that takes a
+date range now says which range exists when a filter matches nothing. The model
+was not at fault; the tool gave it no way to tell the two apart.
+
+**Half an answer on what the history compaction costs.** `chat` throws tool
+results away between questions on the argument that a stale result is worth
+less than the tokens it occupies. That was reasonable and untested, so the
+runner gained `--keep-history` and the case set gained two conversations, and
+the same questions were put both ways.
+
+The cost side is settled: keeping everything made the context 58% larger on
+average and 90% larger at its peak. The accuracy side is not. One round, two
+cases: compacted answered both, full history missed a figure on one. That is a
+single run and one failure is well inside the noise, so it is written here as
+what it is rather than as a result. Repeating it properly is the one item left
+on the list below, and the harness for it now exists. The measurement also had
+to run on `gemini-2.5-flash` rather than the default, because a day of
+developing against the eval had spent the daily quota - itself a fact worth
+knowing about running evals on a free tier.
+
 **More than one status per line.** The follow-up to the item below, and the
 one where the fix went into the data rather than the schema. Asked to list
 every order that arrived on a different date, the model filtered on the
@@ -658,11 +693,13 @@ one buries the slips that matter. Nothing measures this yet, which is why it
 sits below rather than being done already - it is a policy question about the
 data, not a defect anybody has caught.
 
-**2. Measure what the history compaction costs.** Dropping the tool results
-between questions rests on an argument - a stale result is worth less than the
-tokens it occupies - that is reasonable and untested. The way to know is the
-eval harness above, pointed at follow-up questions answered with and
-without the pruning.
+**2. Finish measuring what the history compaction costs.** The harness is
+built and one round is recorded above: the saving is real, the effect on
+accuracy is unknown, because two cases in a single run cannot separate a
+difference from noise. What it needs is repetition - the same two
+conversations, several runs each way, on the default model - which is a quota
+problem rather than a programming one. Until then the compaction stays, on the
+strength of the number that was measured rather than the one that was not.
 
 **3. Cache the comparison across runs.** It is recomputed on every invocation.
 Fine for 31 rows, wasteful for a real extract; parquet beside the CSVs with a

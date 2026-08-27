@@ -252,6 +252,47 @@ def test_an_identifier_that_survives_the_correction_is_flagged(build_agent):
     assert "may not exist" in answer
 
 
+def test_without_compaction_the_tool_traffic_stays_in_the_history(build_agent):
+    """The other side of the comparison the compaction is measured against."""
+    agent, _ = build_agent(
+        [
+            StubResponse(calls=(call("get_summary"),)),
+            StubResponse(text="One line is short."),
+        ],
+        remember=True,
+        compact=False,
+    )
+
+    agent.ask("how bad is it?")
+
+    kinds = [
+        (part.text is not None, part.function_call is not None, part.function_response is not None)
+        for content in agent.history
+        for part in content.parts
+    ]
+    assert (False, True, False) in kinds, "the call should have been kept"
+    assert (False, False, True) in kinds, "the result should have been kept"
+
+
+def test_keeping_the_history_makes_the_next_request_bigger(build_agent):
+    """The claim under test, reduced to something a stub can demonstrate."""
+    scripted = [
+        StubResponse(calls=(call("get_summary"),)),
+        StubResponse(text="First answer."),
+        StubResponse(text="Second answer."),
+    ]
+
+    compact_agent, _ = build_agent(list(scripted), remember=True, compact=True)
+    compact_agent.ask("how bad is it?")
+    compact_agent.ask("and now?")
+
+    full_agent, _ = build_agent(list(scripted), remember=True, compact=False)
+    full_agent.ask("how bad is it?")
+    full_agent.ask("and now?")
+
+    assert full_agent.context_chars > compact_agent.context_chars
+
+
 def test_reset_clears_the_conversation(build_agent):
     agent, _ = build_agent([StubResponse(text="An answer.")], remember=True)
 
