@@ -132,9 +132,30 @@ CASES: list[EvalCase] = [
         forbid_tools=["filter_records"],
         max_calls=3,
         expect_in_answer=["ORD-1016"],
-        # The delay has to be attached to the right order, not merely present
-        # somewhere in the answer next to a date containing a 4.
-        expect_answer_matches=[r"ord-1016[^.!?]*\b4\b|\b4\b[^.!?]*ord-1016"],
+        # The delay has to be there as well as the order. This was first
+        # written as a proximity regex requiring both in one sentence, and it
+        # failed a perfectly good answer that put them in two. Asserting
+        # closeness in prose is asserting the model's punctuation. "4 days" is
+        # the better check because it is unique in this data - exactly one line
+        # moved by four days - so its presence means the right line was found.
+        expect_answer_matches=[r"\b4 days?\b"],
+    ),
+    EvalCase(
+        id="every_late_or_early_line",
+        question="list every order that arrived on a different date than planned",
+        tests="The same trap as latest_deliveries, but asked as a list rather "
+        "than a ranking, and without naming a status. Six lines arrived on the "
+        "wrong date; only five of them are DATE_MISMATCH, because the sixth "
+        "was short as well. An answer of five is complete-looking and wrong.",
+        max_calls=3,
+        expect_in_answer=[
+            "ORD-1003",
+            "ORD-1008",
+            "ORD-1014",
+            "ORD-1016",
+            "ORD-1024",
+            "ORD-1026",
+        ],
     ),
     EvalCase(
         id="unplanned",

@@ -27,14 +27,18 @@ planned quantity as a shortfall; a line that was never planned counts as a \
 surplus.
 - qty_diff_pct: the same difference relative to the plan, in percent
 - planned_date / actual_date and date_diff_days: positive days mean late
-- status, exactly one per line:
+- status, and statuses. A line can differ from the plan in more than one way \
+at once, so it carries every one that applies:
   MATCH - quantity and date both agree with the plan
   QTY_MISMATCH - a different quantity was delivered
-  DATE_MISMATCH - the right quantity, but not on the planned date
+  DATE_MISMATCH - it arrived on a different date
   MISSING_ACTUAL - planned but never delivered
   UNPLANNED - delivered although never planned
-  A line that is both short and late is reported as QTY_MISMATCH; the date slip \
-is still visible in date_diff_days.
+  A delivery that was both short and late has QTY_MISMATCH and DATE_MISMATCH. \
+The single `status` field is only the headline, picked for a report column \
+that has room for one word; filtering by status matches any of them, so asking \
+for DATE_MISMATCH returns that line too. When a record shows an `also` field, \
+that is the rest of what is wrong with it.
 - flags: data-quality notes, not discrepancies. SPLIT_DELIVERY means the line \
 arrived in more than one shipment and the quantities were added up. \
 MISSING_ACTUAL_DATE means the delivery date was blank in the source file.

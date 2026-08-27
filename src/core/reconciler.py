@@ -41,7 +41,18 @@ COMPARISON_COLUMNS = [
     "actual_date",
     "date_diff_days",
     "status",
+    "statuses",
     "flags",
+]
+
+# Which single status a line is reported under when only one will fit: the
+# most expensive kind of wrong first.
+STATUS_PRIORITY = [
+    STATUS_UNPLANNED,
+    STATUS_MISSING_ACTUAL,
+    STATUS_QTY_MISMATCH,
+    STATUS_DATE_MISMATCH,
+    STATUS_MATCH,
 ]
 
 
@@ -71,7 +82,8 @@ def reconcile(planned: pd.DataFrame, actual: pd.DataFrame) -> pd.DataFrame:
     comparison["qty_diff"] = _quantity_difference(comparison)
     comparison["qty_diff_pct"] = _quantity_difference_pct(comparison)
     comparison["date_diff_days"] = _date_difference_days(comparison)
-    comparison["status"] = _classify(comparison)
+    comparison["statuses"] = _collect_statuses(comparison)
+    comparison["status"] = _headline_status(comparison["statuses"])
     comparison["flags"] = _collect_flags(comparison)
 
     comparison = comparison[COMPARISON_COLUMNS]
@@ -133,25 +145,54 @@ def _date_difference_days(comparison: pd.DataFrame) -> pd.Series:
     return difference.dt.days.astype("Int64")
 
 
-def _classify(comparison: pd.DataFrame) -> pd.Series:
-    """Assign exactly one status per line.
+def _collect_statuses(comparison: pd.DataFrame) -> pd.Series:
+    """Every way a line differs from the plan, not just the worst one.
 
-    The order of the checks is the priority: a line that is both late and short
-    is reported as QTY_MISMATCH, because a missing unit costs money while a
-    date slip costs patience. The date_diff_days column still shows the slip,
-    so nothing is lost - only the headline changes.
+    A line can be short and late at once, and for a long time this column did
+    not exist: only the headline did, quantity beat date, and so the latest
+    delivery in the sample data was recorded as QTY_MISMATCH. Anything looking
+    for late deliveries by asking for DATE_MISMATCH missed it - which is
+    exactly what the agent did, fluently and repeatedly, until this was
+    measured. The headline is still useful for a report where one word has to
+    do; it is a summary, and summaries are the wrong thing to filter on.
     """
-    status = pd.Series(STATUS_MATCH, index=comparison.index, dtype="object")
-
-    is_late_or_early = comparison["date_diff_days"].notna() & (
+    unplanned = comparison["planned_qty"].isna()
+    missing = comparison["actual_qty"].isna() & ~unplanned
+    quantity_differs = (comparison["qty_diff"] != 0) & ~unplanned & ~missing
+    date_differs = comparison["date_diff_days"].notna() & (
         comparison["date_diff_days"] != 0
     )
-    status[is_late_or_early] = STATUS_DATE_MISMATCH
 
-    status[comparison["qty_diff"] != 0] = STATUS_QTY_MISMATCH
-    status[comparison["actual_qty"].isna()] = STATUS_MISSING_ACTUAL
-    status[comparison["planned_qty"].isna()] = STATUS_UNPLANNED
-    return status
+    collected = []
+    for position in range(len(comparison)):
+        if unplanned.iloc[position]:
+            collected.append([STATUS_UNPLANNED])
+        elif missing.iloc[position]:
+            collected.append([STATUS_MISSING_ACTUAL])
+        else:
+            entries = []
+            if quantity_differs.iloc[position]:
+                entries.append(STATUS_QTY_MISMATCH)
+            if date_differs.iloc[position]:
+                entries.append(STATUS_DATE_MISMATCH)
+            collected.append(entries or [STATUS_MATCH])
+
+    return pd.Series(
+        [";".join(entry) for entry in collected], index=comparison.index
+    )
+
+
+def _headline_status(statuses: pd.Series) -> pd.Series:
+    """Reduce the list to the single status a one-word column can show."""
+
+    def pick(joined: str) -> str:
+        entries = joined.split(";")
+        for candidate in STATUS_PRIORITY:
+            if candidate in entries:
+                return candidate
+        return STATUS_MATCH
+
+    return statuses.map(pick)
 
 
 def _collect_flags(comparison: pd.DataFrame) -> pd.Series:
@@ -184,6 +225,17 @@ def _collect_flags(comparison: pd.DataFrame) -> pd.Series:
     return collected.str.join(";")
 
 
+def _count_each_status(comparison: pd.DataFrame) -> dict:
+    """How many lines carry each status, counting a line once per status."""
+    entries = comparison["statuses"].str.split(";").explode()
+    counted = entries[entries != ""].value_counts().to_dict()
+    return {
+        status: int(counted.get(status, 0))
+        for status in ALL_STATUSES
+        if counted.get(status, 0)
+    }
+
+
 def summarise(comparison: pd.DataFrame) -> dict:
     """Aggregate the comparison into a handful of headline numbers.
 
@@ -214,6 +266,12 @@ def summarise(comparison: pd.DataFrame) -> dict:
         "discrepancy_lines": discrepancies,
         "discrepancy_rate_pct": round(discrepancies / total * 100, 1) if total else 0.0,
         "status_counts": status_counts,
+        # Counted from every status a line carries rather than its headline, so
+        # a line that is short and late is counted in both. These add up to
+        # more than the number of lines, on purpose: status_counts answers
+        # "how is each line filed", this answers "how many lines have this
+        # problem at all", and the second is the one people mean.
+        "lines_with_each_discrepancy": _count_each_status(comparison),
         "total_planned_qty": int(comparison["planned_qty"].fillna(0).sum()),
         "total_actual_qty": int(comparison["actual_qty"].fillna(0).sum()),
         "net_qty_diff": int(qty_diff.fillna(0).sum()),

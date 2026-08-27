@@ -132,7 +132,16 @@ def filter_records(
                 "error": f"Unknown status '{status}'.",
                 "valid_statuses": ALL_STATUSES,
             }
-        filtered = filtered[filtered["status"] == normalised]
+        # Matched against every status the line carries, not the headline one.
+        # Filtering on the headline meant asking for DATE_MISMATCH and not
+        # being shown a line that was late and short at once - it is filed
+        # under quantity. The token boundaries matter: MATCH is a substring of
+        # QTY_MISMATCH.
+        filtered = filtered[
+            filtered["statuses"].str.contains(
+                rf"(?:^|;){normalised}(?:;|$)", regex=True, na=False
+            )
+        ]
         applied["status"] = normalised
 
     if date_from or date_to:
@@ -478,6 +487,9 @@ def _to_record(row: pd.Series) -> dict:
         "actual_date": _date(row["actual_date"]),
         "date_diff_days": _number(row["date_diff_days"]),
         "status": row["status"],
+        # Only when the headline is not the whole story, which is the case
+        # worth spending tokens on.
+        "also": row["statuses"].replace(row["status"], "").strip(";") or None,
         "flags": row["flags"] or None,
     }
     return {key: value for key, value in record.items() if value is not None}
@@ -554,10 +566,13 @@ TOOL_DECLARATIONS: list[types.FunctionDeclaration] = [
                 "status": types.Schema(
                     type=types.Type.STRING,
                     description=(
-                        "Keep only lines with this status. MATCH: plan and "
-                        "delivery agree. QTY_MISMATCH: a different quantity was "
-                        "delivered. DATE_MISMATCH: the right quantity on the "
-                        "wrong date. MISSING_ACTUAL: planned but never delivered. "
+                        "Keep only lines that have this discrepancy. A line "
+                        "can have more than one and is returned for each: a "
+                        "delivery that was both short and late is matched by "
+                        "QTY_MISMATCH and by DATE_MISMATCH. MATCH: plan and "
+                        "delivery agree. QTY_MISMATCH: a different quantity "
+                        "was delivered. DATE_MISMATCH: it arrived on another "
+                        "date. MISSING_ACTUAL: planned but never delivered. "
                         "UNPLANNED: delivered although never planned."
                     ),
                     enum=list(ALL_STATUSES),

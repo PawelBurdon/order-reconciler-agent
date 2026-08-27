@@ -194,9 +194,25 @@ def test_the_latest_delivery_is_the_one_named_and_hides_behind_its_status(compar
 
     assert latest["order_id"] in case("latest_deliveries").expect_in_answer
     assert latest["date_diff_days"] == 4
+    # The case asserts "4 days" on the grounds that exactly one line moved by
+    # four days. If a second one ever does, that assertion stops meaning what
+    # it says.
+    assert (comparison["date_diff_days"].abs() == 4).sum() == 1
     # The trap the case is built on. If a later edit ever makes this line a
     # DATE_MISMATCH, the case stops testing what it says it tests.
     assert latest["status"] == STATUS_QTY_MISMATCH
+
+
+def test_every_line_on_a_different_date_is_listed_and_one_hides(comparison):
+    moved = comparison[comparison["date_diff_days"].fillna(0) != 0]
+    expected = case("every_late_or_early_line").expect_in_answer
+
+    assert sorted(set(moved["order_id"])) == sorted(expected)
+    # Five of the six carry the DATE_MISMATCH headline. The sixth is the whole
+    # point of the case, so if that ever stops being true the case is empty.
+    headlines = set(moved["status"])
+    assert headlines == {"DATE_MISMATCH", STATUS_QTY_MISMATCH}
+    assert (moved["status"] == "DATE_MISMATCH").sum() == 5
 
 
 def test_the_unplanned_delivery_is_the_one_named(comparison):

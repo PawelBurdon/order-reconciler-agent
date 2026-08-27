@@ -98,6 +98,25 @@ def test_filter_by_status(small_dataset):
     assert result["records"][0]["order_id"] == "ORD-6"
 
 
+def test_filtering_by_status_finds_lines_filed_under_another_one(small_dataset):
+    """ORD-4 is late and short. Its headline says quantity; it is still late."""
+    result = tools.filter_records(status="DATE_MISMATCH")
+
+    returned = {record["order_id"] for record in result["records"]}
+    assert returned == {"ORD-3", "ORD-4"}
+
+    late_and_short = next(r for r in result["records"] if r["order_id"] == "ORD-4")
+    assert late_and_short["status"] == "QTY_MISMATCH"
+    assert late_and_short["also"] == "DATE_MISMATCH"
+
+
+def test_filtering_by_match_does_not_match_qty_mismatch(small_dataset):
+    """MATCH is a substring of QTY_MISMATCH, so the boundaries have to hold."""
+    result = tools.filter_records(status="MATCH")
+
+    assert {record["order_id"] for record in result["records"]} == {"ORD-1"}
+
+
 def test_filters_combine_with_and(small_dataset):
     result = tools.filter_records(customer="Alpine", status="QTY_MISMATCH")
 

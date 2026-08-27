@@ -135,6 +135,56 @@ def test_quantity_outranks_date_when_both_differ():
     assert record["date_diff_days"] == 4
 
 
+def test_a_line_that_is_short_and_late_carries_both_statuses():
+    """The headline still says quantity; the line no longer hides the date."""
+    comparison = reconcile(
+        planned_frame([("ORD-6", "Alpine Gear Co", "SDL-5", 130, "2025-08-15")]),
+        actual_frame([("ORD-6", "Alpine Gear Co", "SDL-5", 118, "2025-08-19")]),
+    )
+
+    record = line(comparison, "ORD-6")
+    assert record["status"] == STATUS_QTY_MISMATCH
+    assert set(record["statuses"].split(";")) == {
+        STATUS_QTY_MISMATCH,
+        STATUS_DATE_MISMATCH,
+    }
+
+
+def test_a_matching_line_carries_only_match():
+    comparison = reconcile(
+        planned_frame([("ORD-7", "Velo Parts Ltd", "BRK-1", 10, "2025-08-01")]),
+        actual_frame([("ORD-7", "Velo Parts Ltd", "BRK-1", 10, "2025-08-01")]),
+    )
+
+    assert line(comparison, "ORD-7")["statuses"] == STATUS_MATCH
+
+
+def test_discrepancy_counts_count_a_line_once_per_problem():
+    comparison = reconcile(
+        planned_frame(
+            [
+                ("ORD-8", "Alpine Gear Co", "SDL-5", 130, "2025-08-15"),
+                ("ORD-9", "Velo Parts Ltd", "BRK-1", 10, "2025-08-01"),
+            ]
+        ),
+        actual_frame(
+            [
+                ("ORD-8", "Alpine Gear Co", "SDL-5", 118, "2025-08-19"),
+                ("ORD-9", "Velo Parts Ltd", "BRK-1", 10, "2025-08-03"),
+            ]
+        ),
+    )
+
+    summary = summarise(comparison)
+    # One line is filed under quantity, the other under date...
+    assert summary["status_counts"][STATUS_QTY_MISMATCH] == 1
+    assert summary["status_counts"][STATUS_DATE_MISMATCH] == 1
+    # ...but two lines arrived on the wrong date, and that is the number
+    # somebody asking about late deliveries means.
+    assert summary["lines_with_each_discrepancy"][STATUS_DATE_MISMATCH] == 2
+    assert summary["lines_with_each_discrepancy"][STATUS_QTY_MISMATCH] == 1
+
+
 def test_split_delivery_is_summed_and_flagged():
     """The same line delivered twice is one line, with the quantities added."""
     comparison = reconcile(

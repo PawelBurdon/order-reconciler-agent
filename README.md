@@ -332,7 +332,7 @@ python -m evals.runner --case worst_customer --verbose
 ```
 
 ```
-Evaluating 11 cases against gemini-3.5-flash-lite
+Evaluating 12 cases against gemini-3.5-flash-lite
 
 overview               pass   5/5 checks   2 calls
 worst_customer         pass   4/4 checks   2 calls
@@ -340,22 +340,23 @@ customers_in_month     pass   5/5 checks   2 calls
 biggest_shortfalls     pass   7/7 checks   2 calls
 shortfalls_in_month    pass   7/7 checks   2 calls
 latest_deliveries      pass   5/5 checks   2 calls
-unplanned              pass   4/4 checks   3 calls
+every_late_or_early_line pass 7/7 checks   2 calls
+unplanned              pass   4/4 checks   2 calls
 report                 pass   3/3 checks   2 calls
 unknown_customer       pass   4/4 checks   2 calls
 out_of_scope           pass   5/5 checks   1 calls
 self_description       pass   3/3 checks   1 calls
 
-11/11 cases passed.
+12/12 cases passed.
   selection   10/10
-  efficiency  11/11
-  grounding   31/31
+  efficiency  12/12
+  grounding   37/37
 ```
 
 Splitting the score by dimension is what makes that readable. Grounding is
-31/31 - across eleven questions, including one about a company that does not
+37/37 - across twelve questions, including one about a company that does not
 exist and one about a column that does not exist, no figure was invented.
-Selection is 10/10 and efficiency is 11/11: every question answered inside its
+Selection is 10/10 and efficiency is 12/12: every question answered inside its
 call budget. A single overall percentage would say none of that, and would have
 hidden the runs where it was not true.
 
@@ -403,11 +404,25 @@ That second finding also improved the harness: a failing case now prints the
 answer and the calls that produced it. A red eval in CI that cannot be
 diagnosed without re-running it by hand is one nobody diagnoses, and the first
 question to ask of any failure is whether the model was wrong or the assertion
-was. It was worth asking - the `unknown_customer` case failed once on a badly
-written assertion of my own, which had been matching a sentence about pricing
-instead of the sentence about the customer.
+was. It has been worth asking: of the five red runs so far, three were the
+assertion rather than the model.
 
-Two of the nine cases are worth pointing at: `unknown_customer` asks about a
+`unknown_customer` looked for a phrase meaning "no". It failed a correct answer
+worded differently, then passed on a sentence about pricing that happened to
+contain one. A list of phrases cannot express "it denied the company exists" -
+there are endless ways to say no. It became a regex for a negation in the same
+sentence as the name, with a unit test over three real answers and two
+fabrications, including the near-miss that had slipped through.
+
+`latest_deliveries` then failed a flawless answer because it wanted the order
+id and the delay in one sentence and the model used two. That is the general
+form of the same mistake: asserting how close two things sit in prose is
+asserting the model's punctuation. It now looks for "4 days", which identifies
+the right line because exactly one line in the data moved by four days - and a
+test guards that fact, so the day a second one does, the assertion fails loudly
+instead of quietly meaning less.
+
+Two of the twelve cases are worth pointing at: `unknown_customer` asks about a
 company that is not in the data, `out_of_scope` asks for a figure the files do
 not contain. The failure being watched for in both is not a wrong answer but a
 confident one.
@@ -559,6 +574,21 @@ dropped. That traffic is the bulk of the history and is stale by the next
 question, while the talking is short and is what *them* or *that order* refers
 back to. A long conversation therefore costs about what a short one does.
 
+**More than one status per line.** The follow-up to the item below, and the
+one where the fix went into the data rather than the schema. Asked to list
+every order that arrived on a different date, the model filtered on the
+`DATE_MISMATCH` status and returned five of the six, on all three runs. The
+missing one was short as well, and quantity won the single status field. There
+was already a warning about this in a tool description - on the wrong tool, so
+it changed nothing, which is the second time in this project that a prompt has
+turned out to be a request rather than a guarantee.
+
+A line now carries every status that applies to it, and filtering matches any
+of them; the single `status` field remains as the headline a report column has
+room for. Three runs before, five of six; three after, six of six - **by the
+same route**. The model did not learn anything. The obvious path stopped being
+a trap.
+
 **A way to rank by lateness.** The measurement that found a wrong answer
 rather than a slow one. Asked which deliveries were most late, the model
 filtered on the `DATE_MISMATCH` status - the only route there was - and named
@@ -617,22 +647,13 @@ one buries the slips that matter. Nothing measures this yet, which is why it
 sits below rather than being done already - it is a policy question about the
 data, not a defect anybody has caught.
 
-**2. Reconsider one status per line.** A line that is both short and late is
-reported as `QTY_MISMATCH`; the slip survives in `date_diff_days`, but the
-headline hides it - and the eval has now caught that hiding a real answer, not
-just a nicety. Ranking by lateness routes around it for one question; anything
-else that reaches for `status=DATE_MISMATCH` is still being misled. A list of
-statuses would be more honest, at the cost of a column that is harder to
-filter on. This has moved up: it is the only remaining item with a
-demonstrated failure behind it.
-
-**3. Measure what the history compaction costs.** Dropping the tool results
+**2. Measure what the history compaction costs.** Dropping the tool results
 between questions rests on an argument - a stale result is worth less than the
 tokens it occupies - that is reasonable and untested. The way to know is the
 eval harness above, pointed at follow-up questions answered with and
 without the pruning.
 
-**4. Cache the comparison across runs.** It is recomputed on every invocation.
+**3. Cache the comparison across runs.** It is recomputed on every invocation.
 Fine for 31 rows, wasteful for a real extract; parquet beside the CSVs with a
 staleness check would fix it. Last because `chat` already reuses one comparison
 for a whole session, so the waste is now per session rather than per question.
