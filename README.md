@@ -484,7 +484,12 @@ should not be able to look like a pass.
 - `google-genai` - the current Google SDK, using raw `FunctionDeclaration`
   schemas and a hand-written calling loop. No LangChain or any other agent
   framework.
-- `gemini-3.5-flash-lite` by default; override with `--model`
+- `gemini-3.5-flash-lite` by default; override with `--model`. That name was
+  checked against the API's own model list, and every figure in this readme was
+  produced with it, on 27 August 2026. Model names are retired and replaced
+  faster than readmes are updated, so if it is no longer offered, `--model` is
+  the whole of the fix - the agent layer neither knows nor cares which one it
+  is talking to.
 - `pandas` for the comparison, `openpyxl` for the Excel export
 - `pytest` for the tests, `python-dotenv` for the key
 - No database. Two CSV files in, one Excel file or one answer out.
