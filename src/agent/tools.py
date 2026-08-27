@@ -172,6 +172,7 @@ def filter_records(
         "totals_over_all_matches": _totals(filtered),
         "records_sorted_by": "absolute qty_diff, descending",
         "records": [_to_record(row) for _, row in page.iterrows()],
+        **_period_note(filtered, applied),
     }
 
 
@@ -288,6 +289,7 @@ def top_discrepancies(
         "limit": limit,
         "returned": len(ranked),
         "excluded_not_comparable": excluded_not_comparable,
+        **_period_note(ranked, applied),
         # Signed values, so the model can tell a shortfall from a surplus.
         "records": [_to_record(row) for _, row in ranked.iterrows()],
     }
@@ -366,6 +368,7 @@ def group_by(
         "groups_total": len(groups),
         "returned": min(len(groups), limit),
         "groups": groups[:limit],
+        **_period_note(frame, applied),
     }
 
 
@@ -410,6 +413,34 @@ def _require_comparison() -> pd.DataFrame:
     if _state["comparison"] is None:
         return _load_comparison()
     return _state["comparison"]
+
+
+def _period_note(matched: pd.DataFrame, applied: dict) -> dict:
+    """Say what period exists when a date filter matched nothing.
+
+    An empty result is ambiguous: it can mean "nothing went wrong then" or
+    "there is no then". A model that cannot tell them apart reports the first,
+    which is how a question about September 2025 came back as a clean bill of
+    health for September 2023. The range costs a few tokens and removes the
+    ambiguity entirely.
+    """
+    if len(matched) or not {"date_from", "date_to"} & applied.keys():
+        return {}
+    dates = pd.concat(
+        [
+            _require_comparison()["planned_date"],
+            _require_comparison()["actual_date"],
+        ]
+    ).dropna()
+    if dates.empty:
+        return {}
+    return {
+        "note": "No line falls in that period. The data covers the range below.",
+        "available_date_range": {
+            "from": dates.min().strftime("%Y-%m-%d"),
+            "to": dates.max().strftime("%Y-%m-%d"),
+        },
+    }
 
 
 def _effective_dates(frame: pd.DataFrame) -> pd.Series:

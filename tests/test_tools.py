@@ -157,6 +157,37 @@ def test_truncation_keeps_the_biggest_deviations(wide_dataset):
     assert smallest_returned == 5
 
 
+def test_a_period_outside_the_data_says_so_instead_of_looking_clean(small_dataset):
+    """Empty means "nothing there", not "nothing wrong there"."""
+    result = tools.filter_records(date_from="2023-09-01", date_to="2023-09-30")
+
+    assert result["total_matching"] == 0
+    assert "No line falls in that period" in result["note"]
+    assert result["available_date_range"] == {"from": "2025-08-03", "to": "2025-09-25"}
+
+
+def test_group_by_also_says_when_the_period_is_empty(small_dataset):
+    result = tools.group_by(date_from="2023-01-01", date_to="2023-12-31")
+
+    assert result["groups_total"] == 0
+    assert "available_date_range" in result
+
+
+def test_ranking_also_says_when_the_period_is_empty(small_dataset):
+    result = tools.top_discrepancies(date_from="2023-01-01", date_to="2023-12-31")
+
+    assert result["returned"] == 0
+    assert "available_date_range" in result
+
+
+def test_an_empty_result_with_no_date_filter_says_nothing_extra(small_dataset):
+    """The note is about periods. A customer with no discrepancies is normal."""
+    result = tools.filter_records(customer="Velo", status="UNPLANNED")
+
+    assert result["total_matching"] == 0
+    assert "available_date_range" not in result
+
+
 def test_unknown_customer_returns_an_error_with_the_valid_names(small_dataset):
     result = tools.filter_records(customer="Acme")
 
