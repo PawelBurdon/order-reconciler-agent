@@ -444,9 +444,10 @@ def _period_note(matched: pd.DataFrame, applied: dict) -> dict:
 
     An empty result is ambiguous: it can mean "nothing went wrong then" or
     "there is no then". A model that cannot tell them apart reports the first,
-    which is how a question about September 2025 came back as a clean bill of
-    health for September 2023. The range costs a few tokens and removes the
-    ambiguity entirely.
+    which is how a question about a September the data covers came back as a
+    clean bill of health for a September three years earlier, after the model
+    guessed the year. The range costs a few tokens and removes the ambiguity
+    entirely.
     """
     if len(matched) or not {"date_from", "date_to"} & applied.keys():
         return {}

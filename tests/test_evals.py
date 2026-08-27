@@ -165,7 +165,7 @@ def test_the_worst_customer_really_is_the_worst(loaded_tools):
 
 def test_the_september_customers_are_the_ones_that_fell_short(loaded_tools):
     result = tools.group_by(
-        dimension="customer", date_from="2025-09-01", date_to="2025-09-30"
+        dimension="customer", date_from="2026-09-01", date_to="2026-09-30"
     )
     short = {
         group["group"]
@@ -195,7 +195,7 @@ def test_the_september_shortfalls_are_the_three_expected(loaded_tools, compariso
     september = comparison[
         comparison["actual_date"]
         .fillna(comparison["planned_date"])
-        .between("2025-09-01", "2025-09-30")
+        .between("2026-09-01", "2026-09-30")
     ]
     shortfalls = september[september["qty_diff"] < 0]
 

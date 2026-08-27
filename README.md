@@ -21,8 +21,8 @@ by a deterministic Python layer rather than by the model.
 ```
 $ python -m src.main ask "how many order lines have a discrepancy?"
 
-Out of the 31 total order lines compared between July 3, 2025, and September 25,
-2025, exactly 17 order lines have a discrepancy. This includes 9 lines with
+Out of the 31 total order lines compared between July 3, 2026, and September 25,
+2026, exactly 17 order lines have a discrepancy. This includes 9 lines with
 quantity mismatches, 5 with date mismatches, 2 missing actual deliveries, and 1
 unplanned delivery.
 ```
@@ -57,7 +57,7 @@ arithmetic.
                        |
                        |  function_call:
                        |  filter_records(status="QTY_MISMATCH",
-                       |                 date_from="2025-09-01", ...)
+                       |                 date_from="2026-09-01", ...)
                        v
         +--------------------------------+
         |  src/agent/tools.py            |  validates the arguments,
@@ -77,7 +77,7 @@ arithmetic.
         +--------------------------------+  or writes the answer
                        |
                        v
-   "In September 2025, three customers under-delivered a total of 385 units..."
+   "In September 2026, three customers under-delivered a total of 385 units..."
 ```
 
 The loop lives in `src/agent/agent.py`: send the question with the tool
@@ -163,14 +163,17 @@ means changing a single module - the core layer would not notice.
 
 These are real runs. A model does not answer identically twice, so the wording
 of an answer will vary between invocations; the figures do not, because they
-come out of pandas.
+come out of pandas. One edit has been made to them: when the sample data was
+moved forward a year, the year in these captures moved with it, so that a
+reader running the same command is not told a different date than they see.
+Everything else is as it was recorded.
 
 **1. A question that narrows the data**
 
 ```
 $ python -m src.main ask "which customers under-delivered in September?"
 
-In September 2025, three customers experienced under-deliveries (shortfalls):
+In September 2026, three customers experienced under-deliveries (shortfalls):
 
 - Alpine Gear Co under-delivered by 280 units (planned 380, actual 100 units
   across 2 order lines).
@@ -186,8 +189,8 @@ In September 2025, three customers experienced under-deliveries (shortfalls):
 [iteration 1]
   -> load_and_compare()
 [iteration 2]
-  -> group_by(sort_by='under_delivered_qty', date_to='2025-09-30',
-              dimension='customer', date_from='2025-09-01')
+  -> group_by(sort_by='under_delivered_qty', date_to='2026-09-30',
+              dimension='customer', date_from='2026-09-01')
 ```
 
 One lookup. Every customer comes back in a single result, so there is no
@@ -200,19 +203,19 @@ September filter - it is matched on the date it was promised for instead.
 ```
 $ python -m src.main ask "top 5 largest shortfalls"
 
-The 5 largest shortfalls by volume across the period from July 3, 2025, to
-September 25, 2025, are:
+The 5 largest shortfalls by volume across the period from July 3, 2026, to
+September 25, 2026, are:
 
 1. Alpine Gear Co (Order ORD-1028, SKU TYR-8008): A shortfall of 280 units
-   (100% missing, planned for September 19, 2025).
+   (100% missing, planned for September 19, 2026).
 2. Summit Bike Supply (Order ORD-1007, SKU DRL-7007): A shortfall of 75 units
-   (100% missing, planned for July 21, 2025).
+   (100% missing, planned for July 21, 2026).
 3. Crankset Supply Inc (Order ORD-1023, SKU CHN-2002): A shortfall of 60 units
-   (actual delivery of 150 units against 210 planned on September 3, 2025).
+   (actual delivery of 150 units against 210 planned on September 3, 2026).
 4. Summit Bike Supply (Order ORD-1025, SKU HDL-4004): A shortfall of 45 units
-   (actual delivery of 40 units against 85 planned on September 9, 2025).
+   (actual delivery of 40 units against 85 planned on September 9, 2026).
 5. Alpine Gear Co (Order ORD-1010, SKU CBL-1010): A shortfall of 40 units
-   (actual delivery of 460 units against 500 planned on July 30, 2025).
+   (actual delivery of 460 units against 500 planned on July 30, 2026).
 ```
 
 ```
@@ -243,8 +246,8 @@ before and after are in the evaluation section.
 ```
 $ python -m src.main ask "how many order lines have a discrepancy?"
 
-Out of the 31 total order lines compared between July 3, 2025, and September 25,
-2025, exactly 17 order lines have a discrepancy. This includes 9 lines with
+Out of the 31 total order lines compared between July 3, 2026, and September 25,
+2026, exactly 17 order lines have a discrepancy. This includes 9 lines with
 quantity mismatches, 5 with date mismatches, 2 missing actual deliveries, and 1
 unplanned delivery.
 ```
@@ -259,23 +262,23 @@ $ python -m src.main chat
 
 > which customer is worst?
 
-The customer worst served by under-delivered quantity between July 3, 2025, and
-September 25, 2025, is Alpine Gear Co. They experienced a total under-delivered
+The customer worst served by under-delivered quantity between July 3, 2026, and
+September 25, 2026, is Alpine Gear Co. They experienced a total under-delivered
 quantity of 332 units (with a planned quantity of 1,100 units and an actual
 delivered quantity of 768 units) spread across 3 discrepancy lines out of their
 5 total order lines.
 
 > and what exactly went wrong for them?
 
-For Alpine Gear Co, five order lines were placed between July 3, 2025, and
-September 25, 2025, two of which matched the plan perfectly.
+For Alpine Gear Co, five order lines were placed between July 3, 2026, and
+September 25, 2026, two of which matched the plan perfectly.
 
 The remaining three lines encountered issues:
-- Order ORD-1028 (SKU TYR-8008, planned for September 19, 2025) resulted in a
+- Order ORD-1028 (SKU TYR-8008, planned for September 19, 2026) resulted in a
   complete shortfall of 280 units as a MISSING_ACTUAL delivery.
-- Order ORD-1010 (SKU CBL-1010, delivered July 30, 2025) had a quantity
+- Order ORD-1010 (SKU CBL-1010, delivered July 30, 2026) had a quantity
   mismatch where 460 units were delivered instead of the planned 500.
-- Order ORD-1016 (SKU SDL-5005, delivered August 19, 2025) was both late by 4
+- Order ORD-1016 (SKU SDL-5005, delivered August 19, 2026) was both late by 4
   days and under-delivered by 12 units.
 ```
 
@@ -376,7 +379,7 @@ what item 1 of the roadmap was, and why it went first.
 
 **An order id quietly corrupted.** On one run the `unplanned` case answered:
 *order `ORD-1000` (SKU CBL-1010) for Northwind Cycles arrived with 300
-unplanned units on 2025-09-25*. Everything in that sentence is right except the
+unplanned units on 2026-09-25*. Everything in that sentence is right except the
 identifier - the order is `ORD-1090`, and the correct value was sitting in the
 tool result the model was reading from. An answer that is right about the
 quantity, the product, the customer and the date passes a human review; this
