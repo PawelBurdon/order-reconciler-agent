@@ -56,7 +56,10 @@ def small_dataset():
                     ("ORD-1", "Velo Parts Ltd", "BRK-1", 120, "2025-08-03"),
                     ("ORD-2", "Velo Parts Ltd", "CHN-2", 185, "2025-08-05"),
                     ("ORD-3", "Northwind Cycles", "CRK-3", 60, "2025-08-10"),
-                    ("ORD-4", "Alpine Gear Co", "HDL-4", 40, "2025-09-11"),
+                    # Late and short at once, so its status is QTY_MISMATCH
+                    # even though it is the latest delivery here - the same
+                    # trap the sample data contains.
+                    ("ORD-4", "Alpine Gear Co", "HDL-4", 40, "2025-09-16"),
                     ("ORD-6", "Northwind Cycles", "CBL-1", 300, "2025-09-25"),
                 ]
             ),
@@ -182,7 +185,7 @@ def test_top_discrepancies_by_percentage_excludes_lines_without_a_plan(small_dat
     order_ids = [record["order_id"] for record in result["records"]]
     assert "ORD-6" not in order_ids
     # The exclusion is reported rather than silently applied.
-    assert result["excluded_without_baseline"] == 1
+    assert result["excluded_not_comparable"] == 1
     assert order_ids[0] == "ORD-5"
 
 
@@ -238,6 +241,36 @@ def test_top_discrepancies_honours_a_date_range(small_dataset):
     assert result["filters_applied"] == {"date_from": "2025-09-01"}
 
 
+def test_ranking_by_lateness_finds_the_line_the_status_hides(small_dataset):
+    """ORD-4 is the latest delivery and is not a DATE_MISMATCH."""
+    result = tools.top_discrepancies(by="date_diff_days", direction="late", limit=3)
+
+    assert result["records"][0]["order_id"] == "ORD-4"
+    assert result["records"][0]["date_diff_days"] == 5
+    assert result["records"][0]["status"] == "QTY_MISMATCH"
+
+
+def test_ranking_by_lateness_ignores_deliveries_that_were_on_time(small_dataset):
+    result = tools.top_discrepancies(by="date_diff_days", limit=20)
+
+    assert all(record["date_diff_days"] != 0 for record in result["records"])
+
+
+def test_a_quantity_direction_is_refused_when_ranking_by_date(small_dataset):
+    """A delivery is not a shortfall of days."""
+    result = tools.top_discrepancies(by="date_diff_days", direction="shortfall")
+
+    assert "error" in result
+    assert result["valid_values"] == ["late", "early", "any"]
+
+
+def test_a_date_direction_is_refused_when_ranking_by_quantity(small_dataset):
+    result = tools.top_discrepancies(by="qty_diff", direction="late")
+
+    assert "error" in result
+    assert result["valid_values"] == ["shortfall", "surplus", "any"]
+
+
 def test_top_discrepancies_rejects_a_bad_date(small_dataset):
     result = tools.top_discrepancies(date_from="last September")
 
@@ -256,7 +289,7 @@ def test_unknown_ranking_column_returns_an_error(small_dataset):
     result = tools.top_discrepancies(by="delivery_delay")
 
     assert "error" in result
-    assert result["valid_values"] == ["qty_diff", "qty_diff_pct"]
+    assert result["valid_values"] == ["qty_diff", "qty_diff_pct", "date_diff_days"]
 
 
 # -- group_by --------------------------------------------------------------

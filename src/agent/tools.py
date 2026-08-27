@@ -166,9 +166,27 @@ def filter_records(
     }
 
 
+RANKING_COLUMNS = ["qty_diff", "qty_diff_pct", "date_diff_days"]
+
 # Ranking by size alone puts a missing delivery and an unrequested one in the
-# same list. Both are large deviations; only one of them is a shortfall.
-TOP_DIRECTIONS = ["shortfall", "surplus", "any"]
+# same list. Both are large deviations; only one of them is a shortfall. Which
+# directions exist depends on what is being ranked - a delivery is not a
+# shortfall of days - so the pair is validated together rather than separately.
+QUANTITY_DIRECTIONS = ["shortfall", "surplus", "any"]
+DATE_DIRECTIONS = ["late", "early", "any"]
+
+
+def _directions_for(by: str) -> list[str]:
+    return DATE_DIRECTIONS if by == "date_diff_days" else QUANTITY_DIRECTIONS
+
+
+def _deviation_column(by: str) -> str:
+    """Which column decides whether a line deviates at all.
+
+    Ranking by percentage still means "lines that differ in quantity"; the
+    percentage is only how they are ordered.
+    """
+    return "date_diff_days" if by == "date_diff_days" else "qty_diff"
 
 
 @_tool
@@ -181,29 +199,39 @@ def top_discrepancies(
 ) -> dict:
     """Rank the biggest deviations from the plan, optionally in one direction.
 
-    The direction argument exists because of a measurement. Without it, asking
-    for the biggest shortfalls returned a ranking by absolute size, whose top
-    entry was a 300-unit surplus. The model noticed and rebuilt the ranking out
-    of other tools - correctly, but in five to seven calls, by a different
-    route on each run. Improvisation is what a model does when the schema
-    cannot express the question.
+    Both extra arguments here exist because of a measurement.
+
+    Without `direction`, asking for the biggest shortfalls returned a ranking
+    by absolute size whose top entry was a 300-unit surplus. The model noticed
+    and rebuilt the ranking out of other tools - correctly, but in five to
+    seven calls, by a different route each run. Improvisation is what a model
+    does when the schema cannot express the question.
+
+    Without `by="date_diff_days"` it was worse than slow. Asked which
+    deliveries were most late, the model filtered on DATE_MISMATCH - the only
+    route available - and confidently named the wrong orders on every run,
+    because the latest delivery in the data is classified QTY_MISMATCH: it was
+    short as well, and quantity wins the status. Ranking off the column instead
+    of the status is what makes that question answerable at all.
     """
-    if by not in {"qty_diff", "qty_diff_pct"}:
+    if by not in RANKING_COLUMNS:
         return {
             "error": f"Unknown ranking column '{by}'.",
-            "valid_values": ["qty_diff", "qty_diff_pct"],
+            "valid_values": RANKING_COLUMNS,
         }
-    if direction not in TOP_DIRECTIONS:
+    if direction not in _directions_for(by):
         return {
-            "error": f"Unknown direction '{direction}'.",
-            "valid_values": TOP_DIRECTIONS,
+            "error": f"Direction '{direction}' does not apply when ranking by '{by}'.",
+            "valid_values": _directions_for(by),
         }
 
     comparison = _require_comparison()
     limit = max(1, min(int(limit), MAX_RECORDS_RETURNED))
     applied: dict[str, str] = {}
 
-    ranked = comparison[comparison["qty_diff"].fillna(0) != 0]
+    # Only lines that deviate on the column being ranked. A line delivered on
+    # time has nothing to say about lateness, in either direction.
+    ranked = comparison[comparison[_deviation_column(by)].fillna(0) != 0]
 
     # Ranking and filtering by period used to live in different tools, so a
     # question that wanted both - "the biggest shortfalls in September" - was
@@ -226,17 +254,19 @@ def top_discrepancies(
             ranked = ranked[dates <= boundaries[1]]
             applied["date_to"] = date_to
 
-    if direction == "shortfall":
-        ranked = ranked[ranked["qty_diff"] < 0]
-    elif direction == "surplus":
-        ranked = ranked[ranked["qty_diff"] > 0]
+    # "Late" and "shortfall" are the same operation on different columns: keep
+    # one side of zero.
+    deviation = ranked[_deviation_column(by)]
+    if direction in {"shortfall", "early"}:
+        ranked = ranked[deviation < 0]
+    elif direction in {"surplus", "late"}:
+        ranked = ranked[deviation > 0]
 
-    excluded_without_baseline = 0
-    if by == "qty_diff_pct":
-        # A line that was never planned has no baseline, so a percentage of the
-        # plan is undefined for it. Saying so beats silently dropping it.
-        excluded_without_baseline = int(ranked["qty_diff_pct"].isna().sum())
-        ranked = ranked[ranked["qty_diff_pct"].notna()]
+    # Lines the chosen column cannot rank: a percentage needs a plan to be a
+    # percentage of, a delay needs both dates. Reported rather than dropped in
+    # silence, so an answer built on the rest knows what it is missing.
+    excluded_not_comparable = int(ranked[by].isna().sum())
+    ranked = ranked[ranked[by].notna()]
 
     ranked = ranked.reindex(
         ranked[by].abs().sort_values(ascending=False, kind="stable").index
@@ -248,7 +278,7 @@ def top_discrepancies(
         "filters_applied": applied,
         "limit": limit,
         "returned": len(ranked),
-        "excluded_without_baseline": excluded_without_baseline,
+        "excluded_not_comparable": excluded_not_comparable,
         # Signed values, so the model can tell a shortfall from a surplus.
         "records": [_to_record(row) for _, row in ranked.iterrows()],
     }
@@ -556,10 +586,14 @@ TOOL_DECLARATIONS: list[types.FunctionDeclaration] = [
             "question about shortfalls, missing units or under-delivery wants "
             "direction='shortfall'. This matters - with the default the two "
             "kinds compete on size alone, so a large over-delivery can outrank "
-            "every shortfall in the list. Takes an optional date range, so "
-            "'the biggest shortfalls in September' is one call - do not rank "
-            "the whole dataset and narrow it yourself. Cannot be filtered by "
-            "customer; for that use filter_records."
+            "every shortfall in the list. This is also the only correct way to "
+            "answer questions about late or early deliveries: rank by "
+            "date_diff_days. Do not look for late deliveries by filtering on "
+            "the DATE_MISMATCH status - a line that was both late and short is "
+            "recorded as QTY_MISMATCH, so that filter misses the worst cases. "
+            "Takes an optional date range, so 'the biggest shortfalls in "
+            "September' is one call. Cannot be filtered by customer; for that "
+            "use filter_records."
         ),
         parameters=types.Schema(
             type=types.Type.OBJECT,
@@ -570,22 +604,28 @@ TOOL_DECLARATIONS: list[types.FunctionDeclaration] = [
                         "'qty_diff' ranks by the number of units missing or "
                         "surplus - use it for volume. 'qty_diff_pct' ranks by the "
                         "deviation relative to the plan - use it to find the "
-                        "worst-served orders regardless of their size."
+                        "worst-served orders regardless of their size. "
+                        "'date_diff_days' ranks by how far the delivery date "
+                        "moved - use it for anything about lateness, delays or "
+                        "early arrivals."
                     ),
-                    enum=["qty_diff", "qty_diff_pct"],
+                    enum=list(RANKING_COLUMNS),
                 ),
                 "direction": types.Schema(
                     type=types.Type.STRING,
                     description=(
-                        "'shortfall' keeps only lines where fewer units arrived "
-                        "than were planned - use it for shortfalls, missing "
-                        "units, under-delivery, or 'who let us down'. 'surplus' "
-                        "keeps only over-deliveries. 'any' ranks both together "
-                        "by size and is the default; use it only when the "
-                        "question really is about deviation in either "
-                        "direction."
+                        "Which side of the deviation to keep. The values "
+                        "depend on what you are ranking. With qty_diff or "
+                        "qty_diff_pct: 'shortfall' for missing units, "
+                        "under-delivery, 'who let us down'; 'surplus' for "
+                        "over-delivery. With date_diff_days: 'late' for "
+                        "delays, 'early' for deliveries that arrived ahead of "
+                        "plan. 'any' works with both and ranks the two sides "
+                        "together by size; it is the default, and it is right "
+                        "only when the question really is about deviation "
+                        "either way."
                     ),
-                    enum=list(TOP_DIRECTIONS),
+                    enum=sorted(set(QUANTITY_DIRECTIONS + DATE_DIRECTIONS)),
                 ),
                 "date_from": types.Schema(
                     type=types.Type.STRING,

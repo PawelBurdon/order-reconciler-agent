@@ -106,7 +106,7 @@ Six functions are declared to the model. It never sees anything else.
 | `load_and_compare()` | Reads both files and reconciles them. Reports the real customer names, the valid statuses and the period covered, so later calls use values that exist. |
 | `get_summary()` | Aggregate figures for the whole comparison: lines matched, lines differing, the breakdown by status, planned against actual units, total under- and over-delivery. |
 | `filter_records(customer, status, date_from, date_to)` | Totals computed over every matching line, plus at most 20 example rows. All arguments optional, combined with AND. |
-| `top_discrepancies(by, limit, direction, date_from, date_to)` | The largest deviations from the plan. `by` is `qty_diff` or `qty_diff_pct`; `direction` narrows to `shortfall` or `surplus`, or ranks both together by size; the dates narrow the period. |
+| `top_discrepancies(by, limit, direction, date_from, date_to)` | The largest deviations from the plan. `by` is `qty_diff`, `qty_diff_pct` or `date_diff_days`; `direction` narrows to one side - `shortfall`/`surplus` for quantities, `late`/`early` for dates; the dates narrow the period. |
 | `group_by(dimension, sort_by, date_from, date_to, limit)` | Every customer, SKU or status as its own group with its own totals, worst first. |
 | `generate_report(output_path)` | Writes the three-sheet Excel file and returns the path. |
 
@@ -332,31 +332,32 @@ python -m evals.runner --case worst_customer --verbose
 ```
 
 ```
-Evaluating 10 cases against gemini-3.5-flash-lite
+Evaluating 11 cases against gemini-3.5-flash-lite
 
 overview               pass   5/5 checks   2 calls
 worst_customer         pass   4/4 checks   2 calls
 customers_in_month     pass   5/5 checks   2 calls
 biggest_shortfalls     pass   7/7 checks   2 calls
 shortfalls_in_month    pass   7/7 checks   2 calls
-unplanned              pass   4/4 checks   2 calls
+latest_deliveries      pass   5/5 checks   2 calls
+unplanned              pass   4/4 checks   3 calls
 report                 pass   3/3 checks   2 calls
 unknown_customer       pass   4/4 checks   2 calls
 out_of_scope           pass   5/5 checks   1 calls
 self_description       pass   3/3 checks   1 calls
 
-10/10 cases passed.
-  selection   8/8
-  efficiency  10/10
-  grounding   29/29
+11/11 cases passed.
+  selection   10/10
+  efficiency  11/11
+  grounding   31/31
 ```
 
 Splitting the score by dimension is what makes that readable. Grounding is
-29/29 - across ten questions, including one about a company that does not
+31/31 - across eleven questions, including one about a company that does not
 exist and one about a column that does not exist, no figure was invented.
-Selection is 8/8, and efficiency is 10/10: every question answered within its
-call budget, none of them taking more than two. A single overall percentage
-would say none of that, and would have hidden the runs where it was not true.
+Selection is 10/10 and efficiency is 11/11: every question answered inside its
+call budget. A single overall percentage would say none of that, and would have
+hidden the runs where it was not true.
 
 ### What it has actually caught
 
@@ -558,6 +559,20 @@ dropped. That traffic is the bulk of the history and is stale by the next
 question, while the talking is short and is what *them* or *that order* refers
 back to. A long conversation therefore costs about what a short one does.
 
+**A way to rank by lateness.** The measurement that found a wrong answer
+rather than a slow one. Asked which deliveries were most late, the model
+filtered on the `DATE_MISMATCH` status - the only route there was - and named
+the wrong orders on all three runs, fluently, with the right SKUs and dates
+attached. The latest delivery in the data is not a `DATE_MISMATCH`: it was
+short as well, and quantity wins the status. So the obvious route silently
+skips the worst case, and the answer reads as complete.
+
+`top_discrepancies` now ranks by `date_diff_days` with `direction` of `late`
+or `early`, off the column rather than the status. Three runs before, all
+wrong; three after, all right, the model reaching for it unprompted. The gap
+this exposed in the status design is item 2 below - ranking makes the question
+answerable, it does not stop the status from misleading elsewhere.
+
 **A date range on the ranking tool.** The item where measuring first changed
 the answer. The prediction was that "the biggest shortfalls in September" would
 be expensive, because ranking and filtering lived in different tools. It was
@@ -597,12 +612,19 @@ cannot quietly widen.
 
 **1. Make the date comparison tolerant.** A delivery one day late and one
 thirty days late are both `DATE_MISMATCH`. A real reconciliation has a
-tolerance window, and lateness should be rankable the way quantity is.
+tolerance window: a slip inside it is not a discrepancy, and treating it as
+one buries the slips that matter. Nothing measures this yet, which is why it
+sits below rather than being done already - it is a policy question about the
+data, not a defect anybody has caught.
 
 **2. Reconsider one status per line.** A line that is both short and late is
 reported as `QTY_MISMATCH`; the slip survives in `date_diff_days`, but the
-headline hides it. A list of statuses would be more honest, at the cost of a
-column that is harder to filter on.
+headline hides it - and the eval has now caught that hiding a real answer, not
+just a nicety. Ranking by lateness routes around it for one question; anything
+else that reaches for `status=DATE_MISMATCH` is still being misled. A list of
+statuses would be more honest, at the cost of a column that is harder to
+filter on. This has moved up: it is the only remaining item with a
+demonstrated failure behind it.
 
 **3. Measure what the history compaction costs.** Dropping the tool results
 between questions rests on an argument - a stale result is worth less than the

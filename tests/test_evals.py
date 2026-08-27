@@ -19,7 +19,12 @@ from evals.cases import CASES, EvalCase
 from src.agent import tools
 from src.agent.tools import TOOL_IMPLEMENTATIONS
 from src.core.loader import load_actual_orders, load_planned_orders
-from src.core.reconciler import STATUS_UNPLANNED, reconcile, summarise
+from src.core.reconciler import (
+    STATUS_QTY_MISMATCH,
+    STATUS_UNPLANNED,
+    reconcile,
+    summarise,
+)
 
 PLANNED_PATH = "sample_data/planned_orders.csv"
 ACTUAL_PATH = "sample_data/actual_orders.csv"
@@ -180,6 +185,18 @@ def test_the_september_shortfalls_are_the_three_expected(loaded_tools, compariso
         line = comparison[comparison["order_id"] == order_id].iloc[0]
         assert line["qty_diff"] < 0
         assert order_id not in set(september["order_id"])
+
+
+def test_the_latest_delivery_is_the_one_named_and_hides_behind_its_status(comparison):
+    """Both halves of that case: which order, and why it is easy to miss."""
+    late = comparison[comparison["date_diff_days"].fillna(0) > 0]
+    latest = late.sort_values("date_diff_days", ascending=False).iloc[0]
+
+    assert latest["order_id"] in case("latest_deliveries").expect_in_answer
+    assert latest["date_diff_days"] == 4
+    # The trap the case is built on. If a later edit ever makes this line a
+    # DATE_MISMATCH, the case stops testing what it says it tests.
+    assert latest["status"] == STATUS_QTY_MISMATCH
 
 
 def test_the_unplanned_delivery_is_the_one_named(comparison):

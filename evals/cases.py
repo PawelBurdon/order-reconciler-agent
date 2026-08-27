@@ -119,6 +119,24 @@ CASES: list[EvalCase] = [
         expect_not_in_answer=["ORD-1007", "ORD-1010"],
     ),
     EvalCase(
+        id="latest_deliveries",
+        question="which deliveries were the most late, and by how many days?",
+        tests="A trap built by an earlier decision. The obvious route is "
+        "filtering on DATE_MISMATCH, and the latest delivery in the data is "
+        "not a DATE_MISMATCH: it was short as well, and quantity wins the "
+        "status. Measured before there was a way to rank by lateness, the "
+        "model took that route on all three runs and named the wrong orders, "
+        "fluently. Ranking off the column instead of the status is the fix, "
+        "so the tool is asserted, not just the answer.",
+        expect_tools=["top_discrepancies"],
+        forbid_tools=["filter_records"],
+        max_calls=3,
+        expect_in_answer=["ORD-1016"],
+        # The delay has to be attached to the right order, not merely present
+        # somewhere in the answer next to a date containing a 4.
+        expect_answer_matches=[r"ord-1016[^.!?]*\b4\b|\b4\b[^.!?]*ord-1016"],
+    ),
+    EvalCase(
         id="unplanned",
         question="did anything arrive that nobody ordered?",
         tests="A status the user names in their own words rather than in the "
