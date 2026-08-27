@@ -52,6 +52,11 @@ class EvalCase:
     # ways to say "no", and a case that keeps tripping over which one the model
     # picked is testing vocabulary rather than behaviour.
     expect_answer_matches: list[str] = field(default_factory=list)
+    # The load-bearing half. Proving an answer says something is hard, because
+    # there are unlimited ways to say it; proving it does not name a quantity
+    # or an order is easy, and for the cases about data that is not there, not
+    # naming things is the whole requirement.
+    expect_answer_not_matches: list[str] = field(default_factory=list)
 
     # Set when the case documents a gap that is known and not yet fixed. It is
     # still run and still reported - it just does not fail the suite, because
@@ -180,22 +185,27 @@ CASES: list[EvalCase] = [
         question="what happened with orders from Acme Corp?",
         tests="A customer that is not in the data. The failure to catch here "
         "is a confident answer about a company that does not exist. This case "
-        "was first written as a list of phrases meaning 'no', and it was wrong "
-        "three times: it missed correct answers worded differently, and once "
-        "passed on a sentence about pricing that happened to contain one. The "
-        "regex asks the question properly - is there a negation in the same "
-        "sentence as the company - and forbidding an order id catches the "
-        "invented specifics, since the only way one appears here is invention.",
+        "has been rewritten more often than any other, and always because the "
+        "assertion was wrong rather than the answer: a phrase list missed "
+        "correct answers worded differently, then matched a sentence about "
+        "pricing, then a negation regex missed 'cannot' because 'not' inside "
+        "it is not a word. Detecting a denial in free prose is a losing game. "
+        "What is stated positively is now only that the company is named; the "
+        "checks that carry the weight say what must be absent, because for a "
+        "customer who does not exist, naming nothing concrete is the entire "
+        "requirement.",
         max_calls=4,
         expect_in_answer=["Acme"],
-        # A denial either side of the name: "Acme Corp is not in the dataset",
-        # "we have no orders for Acme Corp". Sentence-bounded, so a negation
-        # about something else further down the answer cannot satisfy it.
-        expect_answer_matches=[
-            r"acme[^.!?]*\b(?:not|no|never|nothing)\b"
-            r"|\b(?:not|no|never|nothing)\b[^.!?]*acme"
-        ],
         expect_not_in_answer=["ORD-"],
+        # No quantity claim and no delivery date: everything a real answer
+        # about a real customer would contain, and everything an answer about
+        # this one would have to invent.
+        expect_answer_not_matches=[r"\d+\s*units", r"\d{4}-\d{2}-\d{2}\s*\("],
+        # Kept as a weak signal rather than the main check, with the vocabulary
+        # it has actually needed so far.
+        expect_answer_matches=[
+            r"\b(?:no|not|cannot|can't|unable|none|never|nothing|n't)\b"
+        ],
     ),
     EvalCase(
         id="out_of_scope",

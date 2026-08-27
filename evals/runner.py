@@ -204,6 +204,15 @@ def _score(entry: EvalCase, calls: list[dict], answer: str) -> list[Check]:
             )
         )
 
+    for pattern in entry.expect_answer_not_matches:
+        checks.append(
+            Check(
+                GROUNDING,
+                re.search(pattern, answer, re.IGNORECASE | re.DOTALL) is None,
+                f"answer does not match /{pattern}/",
+            )
+        )
+
     for forbidden in entry.expect_not_in_answer:
         checks.append(
             Check(

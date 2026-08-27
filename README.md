@@ -445,6 +445,17 @@ costs money and it is not deterministic, so it is a separate CI job that runs
 when a `GEMINI_API_KEY` secret is configured and says plainly that it skipped
 when there is none.
 
+It also has a quota, and the run that first hit it is worth recording. A case
+that cannot be reached is reported as `ERROR`, not `FAIL`, because "the model
+answered badly" and "nobody could ask the model" are different results and
+only the first says anything about the code. Both still fail the build:
+missing signal is not the same as a pass, and an eval that goes green when it
+did not run is worse than no eval. A dozen cases at two or three calls each is
+roughly twenty-five requests per push, against a free-tier ceiling of five
+hundred a day, so it is a limit a heavy day of development reaches and normal
+use does not. The workflow can be re-run from the Actions tab once the quota
+resets.
+
 ## Stack
 
 - Python 3.11+

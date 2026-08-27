@@ -78,39 +78,62 @@ def test_every_case_asserts_something(entry: EvalCase):
         or entry.expect_any_in_answer
         or entry.expect_not_in_answer
         or entry.expect_answer_matches
+        or entry.expect_answer_not_matches
     ), f"{entry.id} would pass no matter what the model did"
 
 
 @pytest.mark.parametrize("entry", CASES, ids=lambda entry: entry.id)
 def test_every_pattern_compiles(entry: EvalCase):
     """A broken regex must fail here, not halfway through a billed eval run."""
-    for pattern in entry.expect_answer_matches:
+    for pattern in entry.expect_answer_matches + entry.expect_answer_not_matches:
         re.compile(pattern)
 
 
-def test_the_unknown_customer_pattern_reads_denials_and_rejects_inventions():
-    """The regex is the assertion, so it gets its own test.
+def _judge(entry: EvalCase, answer: str) -> bool:
+    """Apply one case's answer assertions the way the runner does."""
+    flags = re.IGNORECASE | re.DOTALL
+    return (
+        all(text.lower() in answer.lower() for text in entry.expect_in_answer)
+        and all(
+            text.lower() not in answer.lower() for text in entry.expect_not_in_answer
+        )
+        and all(re.search(p, answer, flags) for p in entry.expect_answer_matches)
+        and not any(
+            re.search(p, answer, flags) for p in entry.expect_answer_not_matches
+        )
+    )
 
-    Three of these are real answers the model has given; the last is the
-    fabrication the case exists to catch.
+
+def test_the_unknown_customer_case_accepts_every_denial_it_has_ever_seen():
+    """This case has been rewritten four times, always because it was wrong.
+
+    Every string here is a real answer the model gave that an earlier version
+    of the assertion rejected. They stay as a regression test: a rewrite that
+    breaks one of them is a rewrite that repeats a mistake already made.
     """
-    pattern = case("unknown_customer").expect_answer_matches[0]
-
-    accepted = [
+    entry = case("unknown_customer")
+    real_answers = [
         'I can help you analyze the data, but "Acme Corp" is not in the dataset.',
         "We do not have any orders or records for Acme Corp in the system.",
         "The data does not contain any orders from Acme Corp.",
-    ]
-    rejected = [
-        "Acme Corp under-delivered by 40 units across two order lines.",
-        # A denial about something else must not satisfy a denial about Acme.
-        "Acme Corp ordered 120 units. The data does not include pricing.",
+        "I cannot find any orders for Acme Corp in the system. The available "
+        "customers are Alpine Gear Co and Velo Parts Ltd.",
     ]
 
-    for answer in accepted:
-        assert re.search(pattern, answer, re.IGNORECASE | re.DOTALL), answer
-    for answer in rejected:
-        assert not re.search(pattern, answer, re.IGNORECASE | re.DOTALL), answer
+    for answer in real_answers:
+        assert _judge(entry, answer), answer
+
+
+def test_the_unknown_customer_case_rejects_an_invented_answer():
+    entry = case("unknown_customer")
+    fabrications = [
+        "Acme Corp under-delivered by 40 units across two order lines.",
+        "Acme Corp's order ORD-1099 was never delivered.",
+        "Acme Corp ordered 120 units, and no shortfall was recorded.",
+    ]
+
+    for answer in fabrications:
+        assert not _judge(entry, answer), answer
 
 
 @pytest.mark.parametrize("entry", CASES, ids=lambda entry: entry.id)
