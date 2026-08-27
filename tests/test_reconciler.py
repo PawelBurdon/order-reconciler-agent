@@ -1,10 +1,11 @@
-"""Tests for the comparison logic.
+﻿"""Tests for the comparison logic.
 
 These run on DataFrames built by hand rather than on the sample files, so a
 test says what it is about: one scenario per test, three rows at most.
 """
 
 import pandas as pd
+import pytest
 
 from src.core.reconciler import (
     STATUS_DATE_MISMATCH,
@@ -120,6 +121,63 @@ def test_right_quantity_on_the_wrong_date():
     record = line(comparison, "ORD-5")
     assert record["status"] == STATUS_DATE_MISMATCH
     assert record["date_diff_days"] == 2
+
+
+def test_a_slip_inside_the_tolerance_is_not_a_discrepancy():
+    planned = planned_frame(
+        [
+            ("ORD-A", "Velo Parts Ltd", "BRK-1", 10, "2025-08-01"),
+            ("ORD-B", "Velo Parts Ltd", "CHN-2", 10, "2025-08-01"),
+        ]
+    )
+    actual = actual_frame(
+        [
+            ("ORD-A", "Velo Parts Ltd", "BRK-1", 10, "2025-08-03"),
+            ("ORD-B", "Velo Parts Ltd", "CHN-2", 10, "2025-08-06"),
+        ]
+    )
+
+    strict = reconcile(planned, actual)
+    assert line(strict, "ORD-A")["status"] == STATUS_DATE_MISMATCH
+    assert line(strict, "ORD-B")["status"] == STATUS_DATE_MISMATCH
+
+    lenient = reconcile(planned, actual, date_tolerance_days=2)
+    forgiven = line(lenient, "ORD-A")
+    assert forgiven["status"] == STATUS_MATCH
+    # Forgiven, not hidden: the slip is still on the line, and so is the fact
+    # that a setting is the only reason it does not count.
+    assert forgiven["date_diff_days"] == 2
+    assert "WITHIN_DATE_TOLERANCE" in forgiven["flags"]
+    # Five days is still five days.
+    assert line(lenient, "ORD-B")["status"] == STATUS_DATE_MISMATCH
+
+
+def test_the_tolerance_works_in_both_directions():
+    """Two days early is as far from the promise as two days late."""
+    comparison = reconcile(
+        planned_frame([("ORD-C", "Velo Parts Ltd", "BRK-1", 10, "2025-08-05")]),
+        actual_frame([("ORD-C", "Velo Parts Ltd", "BRK-1", 10, "2025-08-03")]),
+        date_tolerance_days=2,
+    )
+
+    record = line(comparison, "ORD-C")
+    assert record["date_diff_days"] == -2
+    assert record["status"] == STATUS_MATCH
+
+
+def test_the_summary_says_which_tolerance_it_used():
+    comparison = reconcile(
+        planned_frame([("ORD-D", "Velo Parts Ltd", "BRK-1", 10, "2025-08-01")]),
+        actual_frame([("ORD-D", "Velo Parts Ltd", "BRK-1", 10, "2025-08-02")]),
+        date_tolerance_days=3,
+    )
+
+    assert summarise(comparison, 3)["date_tolerance_days"] == 3
+
+
+def test_a_negative_tolerance_is_refused():
+    with pytest.raises(ValueError, match="zero or more"):
+        reconcile(planned_frame([]), actual_frame([]), date_tolerance_days=-1)
 
 
 def test_quantity_outranks_date_when_both_differ():

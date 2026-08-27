@@ -1,4 +1,4 @@
-"""The tools the model is allowed to call, plus their schemas.
+﻿"""The tools the model is allowed to call, plus their schemas.
 
 This module is the whole contract between the AI layer and the deterministic
 layer. Two rules run through all of it:
@@ -40,6 +40,7 @@ _state: dict[str, Any] = {
     "planned_path": DEFAULT_PLANNED_PATH,
     "actual_path": DEFAULT_ACTUAL_PATH,
     "comparison": None,
+    "date_tolerance_days": 0,
 }
 
 
@@ -47,6 +48,12 @@ def configure_data_sources(planned_path: str | Path, actual_path: str | Path) ->
     """Point the tools at different CSV files (used by the CLI)."""
     _state["planned_path"] = Path(planned_path)
     _state["actual_path"] = Path(actual_path)
+    _state["comparison"] = None
+
+
+def configure_date_tolerance(days: int) -> None:
+    """Set the grace period the comparison starts with (used by the CLI)."""
+    _state["date_tolerance_days"] = int(days)
     _state["comparison"] = None
 
 
@@ -76,10 +83,24 @@ def _tool(function: Callable[..., dict]) -> Callable[..., dict]:
 
 
 @_tool
-def load_and_compare() -> dict:
-    """Read both CSV files, run the comparison and cache it."""
-    comparison = _load_comparison()
-    summary = summarise(comparison)
+def load_and_compare(date_tolerance_days: int | None = None) -> dict:
+    """Read both CSV files, run the comparison and cache it.
+
+    Calling it again with a different tolerance re-runs the comparison, which
+    is what makes "and if we allowed three days?" answerable without leaving
+    the conversation.
+    """
+    if date_tolerance_days is not None:
+        if int(date_tolerance_days) < 0:
+            return {
+                "error": "date_tolerance_days cannot be negative.",
+                "given": date_tolerance_days,
+            }
+        _state["date_tolerance_days"] = int(date_tolerance_days)
+        _state["comparison"] = None
+
+    comparison = _require_comparison()
+    summary = summarise(comparison, _state["date_tolerance_days"])
 
     # Deliberately not the data - just enough vocabulary for the model to build
     # a valid follow-up call: the exact customer spellings, the legal status
@@ -92,13 +113,14 @@ def load_and_compare() -> dict:
         "customers": summary["customers"],
         "date_range": summary["date_range"],
         "available_statuses": ALL_STATUSES,
+        "date_tolerance_days": summary["date_tolerance_days"],
     }
 
 
 @_tool
 def get_summary() -> dict:
     """Return the aggregate figures for the whole comparison."""
-    return summarise(_require_comparison())
+    return summarise(_require_comparison(), _state["date_tolerance_days"])
 
 
 @_tool
@@ -377,7 +399,9 @@ def generate_report(output_path: str | None = None) -> dict:
     """Write the Excel report to disk and report where it landed."""
     comparison = _require_comparison()
     path = write_report(
-        comparison, summarise(comparison), output_path or DEFAULT_REPORT_PATH
+        comparison,
+        summarise(comparison, _state["date_tolerance_days"]),
+        output_path or DEFAULT_REPORT_PATH,
     )
     discrepancies = int((comparison["status"] != STATUS_MATCH).sum())
 
@@ -398,7 +422,7 @@ def _load_comparison() -> pd.DataFrame:
     """Run the core layer and cache the result for the rest of the session."""
     planned = load_planned_orders(_state["planned_path"])
     actual = load_actual_orders(_state["actual_path"])
-    comparison = reconcile(planned, actual)
+    comparison = reconcile(planned, actual, _state["date_tolerance_days"])
     _state["comparison"] = comparison
     return comparison
 
@@ -557,9 +581,29 @@ TOOL_DECLARATIONS: list[types.FunctionDeclaration] = [
             "Load the planned and actual order files and reconcile them. Call this "
             "first, before any other tool. Returns the number of order lines, the "
             "exact customer names, the date range covered and the list of valid "
-            "status values - use those spellings in later calls."
+            "status values - use those spellings in later calls. Call it a "
+            "second time with date_tolerance_days to answer a question about a "
+            "different grace period."
         ),
-        parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "date_tolerance_days": types.Schema(
+                    type=types.Type.INTEGER,
+                    description=(
+                        "How many days a delivery may move without counting as "
+                        "a date discrepancy. Leave it out for the setting the "
+                        "program was started with, which is normally 0 - every "
+                        "date must match exactly. Set it when the question "
+                        "supposes a different rule: 'how many are late if we "
+                        "allow three days', 'ignore slips under a week'. "
+                        "Re-running the comparison changes the status of "
+                        "affected lines and every count that follows, so say "
+                        "which tolerance an answer is based on."
+                    ),
+                ),
+            },
+        ),
     ),
     types.FunctionDeclaration(
         name="get_summary",

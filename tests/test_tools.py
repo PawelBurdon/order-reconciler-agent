@@ -35,6 +35,20 @@ def clear_cache():
     """Never let one test see the comparison another test injected."""
     yield
     tools.set_comparison(None)
+    tools.configure_date_tolerance(0)
+
+
+@pytest.fixture
+def comparison_files():
+    """Point the tools at the sample files, for the few tests that need to
+    exercise loading rather than an injected frame."""
+    tools.configure_data_sources(
+        "sample_data/planned_orders.csv", "sample_data/actual_orders.csv"
+    )
+    yield
+    tools.configure_data_sources(
+        tools.DEFAULT_PLANNED_PATH, tools.DEFAULT_ACTUAL_PATH
+    )
 
 
 @pytest.fixture
@@ -407,6 +421,28 @@ def test_group_by_rejects_an_unknown_sort_key(small_dataset):
 
 
 # -- get_summary and dispatch ---------------------------------------------
+
+
+def test_the_model_can_ask_for_a_different_tolerance(comparison_files):
+    """The whole point of exposing it: "and if we allowed three days?"."""
+    strict = tools.load_and_compare()
+    assert strict["date_tolerance_days"] == 0
+    tight = tools.get_summary()
+
+    lenient = tools.load_and_compare(date_tolerance_days=3)
+    assert lenient["date_tolerance_days"] == 3
+    relaxed = tools.get_summary()
+
+    assert relaxed["discrepancy_lines"] < tight["discrepancy_lines"]
+    # Only the dates move. A shortfall is a shortfall whatever the calendar says.
+    assert relaxed["under_delivered_qty"] == tight["under_delivered_qty"]
+
+
+def test_a_negative_tolerance_comes_back_as_an_error(comparison_files):
+    result = tools.load_and_compare(date_tolerance_days=-2)
+
+    assert "error" in result
+    assert result["given"] == -2
 
 
 def test_get_summary_reports_the_whole_dataset(small_dataset):

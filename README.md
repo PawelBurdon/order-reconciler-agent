@@ -103,7 +103,7 @@ Six functions are declared to the model. It never sees anything else.
 
 | Tool | What it returns |
 | --- | --- |
-| `load_and_compare()` | Reads both files and reconciles them. Reports the real customer names, the valid statuses and the period covered, so later calls use values that exist. |
+| `load_and_compare(date_tolerance_days)` | Reads both files and reconciles them. Reports the real customer names, the valid statuses and the period covered, so later calls use values that exist. Called again with a tolerance, it re-runs the comparison under that grace period. |
 | `get_summary()` | Aggregate figures for the whole comparison: lines matched, lines differing, the breakdown by status, planned against actual units, total under- and over-delivery. |
 | `filter_records(customer, status, date_from, date_to)` | Totals computed over every matching line, plus at most 20 example rows. All arguments optional, combined with AND. |
 | `top_discrepancies(by, limit, direction, date_from, date_to)` | The largest deviations from the plan. `by` is `qty_diff`, `qty_diff_pct` or `date_diff_days`; `direction` narrows to one side - `shortfall`/`surplus` for quantities, `late`/`early` for dates; the dates narrow the period. |
@@ -526,7 +526,10 @@ allowed to answer without calling a tool, because it is a fact about the
 program rather than a fact about the orders.
 
 All three commands accept `--planned` and `--actual` to point at your own files
-instead of `sample_data/`, and `ask` and `chat` also accept `--model`.
+instead of `sample_data/`, plus `--date-tolerance DAYS` to say how far a
+delivery may move before it counts as late. `ask` and `chat` also accept
+`--model`, and in those two the tolerance is only a starting point - a question
+can ask for a different one.
 
 ### Using your own data
 
@@ -594,6 +597,22 @@ compacted to the question and the answer; the tool traffic behind it is
 dropped. That traffic is the bulk of the history and is stale by the next
 question, while the talking is short and is what *them* or *that order* refers
 back to. A long conversation therefore costs about what a short one does.
+
+**A grace period for dates.** The only item on the list that was a feature
+rather than a defect: nothing was wrong, the question was whether a business
+wants a one-day slip filed beside a thirty-day one. So there was no before to
+measure, only a decision to make, and the decision was to let the agent hold
+it rather than the operator alone. `--date-tolerance` sets where the
+comparison starts; `load_and_compare(date_tolerance_days)` lets a question
+move it, so *and how many are late if we allow three days?* is answered in the
+conversation instead of by restarting the program with a different flag.
+
+Zero stays the default, so every figure elsewhere in this readme still means
+what it says. A slip inside the tolerance stops being a discrepancy but keeps
+its `date_diff_days` and gains a `WITHIN_DATE_TOLERANCE` flag, because a
+setting should change how a line is filed and not make it look like it arrived
+exactly as promised. On the sample data: 17 discrepancies at zero days, 14 at
+two, 12 at seven, with the quantity figures untouched throughout.
 
 **A cache that turned out to be a slow loop.** The list said the comparison
 was recomputed on every invocation and that this was wasteful on a real
@@ -706,14 +725,7 @@ cannot quietly widen.
 
 ### Next, in the order I would do them
 
-**1. Make the date comparison tolerant.** A delivery one day late and one
-thirty days late are both `DATE_MISMATCH`. A real reconciliation has a
-tolerance window: a slip inside it is not a discrepancy, and treating it as
-one buries the slips that matter. Nothing measures this yet, which is why it
-sits below rather than being done already - it is a policy question about the
-data, not a defect anybody has caught.
-
-**2. Finish measuring what the history compaction costs.** The harness is
+**1. Finish measuring what the history compaction costs.** The harness is
 built and one round is recorded above: the saving is real, the effect on
 accuracy is unknown, because two cases in a single run cannot separate a
 difference from noise. What it needs is repetition - the same two

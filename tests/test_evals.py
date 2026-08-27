@@ -238,6 +238,32 @@ def test_every_line_on_a_different_date_is_listed_and_one_hides(comparison):
     assert (moved["status"] == "DATE_MISMATCH").sum() == 5
 
 
+def test_the_two_day_grace_period_splits_the_late_lines_as_the_case_says():
+    entry = case("tolerance_question")
+    lenient = reconcile(
+        load_planned_orders(PLANNED_PATH),
+        load_actual_orders(ACTUAL_PATH),
+        date_tolerance_days=2,
+    )
+    still_late = set(
+        lenient.loc[
+            lenient["statuses"].str.contains("DATE_MISMATCH"), "order_id"
+        ]
+    )
+
+    assert still_late == set(entry.expect_in_answer)
+    # And the ones the case forbids are real late lines that the grace period
+    # excuses - otherwise forbidding them proves nothing.
+    for order_id in entry.expect_not_in_answer:
+        assert order_id not in still_late
+        strict = reconcile(
+            load_planned_orders(PLANNED_PATH), load_actual_orders(ACTUAL_PATH)
+        )
+        assert "DATE_MISMATCH" in "".join(
+            strict.loc[strict["order_id"] == order_id, "statuses"]
+        )
+
+
 def test_the_unplanned_delivery_is_the_one_named(comparison):
     unplanned = comparison[comparison["status"] == STATUS_UNPLANNED]
     expected = case("unplanned").expect_in_answer

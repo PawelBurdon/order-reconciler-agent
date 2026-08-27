@@ -25,6 +25,7 @@ ALL_STATUSES = [
 ]
 
 FLAG_SPLIT_DELIVERY = "SPLIT_DELIVERY"
+FLAG_WITHIN_DATE_TOLERANCE = "WITHIN_DATE_TOLERANCE"
 FLAG_MISSING_PLANNED_DATE = "MISSING_PLANNED_DATE"
 FLAG_MISSING_ACTUAL_DATE = "MISSING_ACTUAL_DATE"
 FLAG_MISSING_CUSTOMER = "MISSING_CUSTOMER"
@@ -56,13 +57,27 @@ STATUS_PRIORITY = [
 ]
 
 
-def reconcile(planned: pd.DataFrame, actual: pd.DataFrame) -> pd.DataFrame:
+def reconcile(
+    planned: pd.DataFrame, actual: pd.DataFrame, date_tolerance_days: int = 0
+) -> pd.DataFrame:
     """Compare both sides and return one row per (order_id, sku) line.
 
     The join is an outer join, so a line that exists on only one side survives
     the comparison instead of disappearing - those are exactly the rows a
     reconciliation is looking for.
+
+    `date_tolerance_days` is the grace period: a delivery that moved by no more
+    than this many days is not counted as a date discrepancy. Zero, the
+    default, means the planned date is the promise and any other date breaks
+    it. Real agreements are rarely that strict, and a reconciliation that files
+    a one-day slip alongside a thirty-day one buries the thirty. The slip is
+    still visible in date_diff_days either way, and a line excused by the
+    tolerance is flagged rather than silently made to look perfect.
     """
+    if date_tolerance_days < 0:
+        raise ValueError(
+            f"date_tolerance_days must be zero or more, not {date_tolerance_days}."
+        )
     planned_lines = _collapse_duplicates(planned, "planned_qty", "planned_date")
     actual_lines = _collapse_duplicates(actual, "actual_qty", "actual_date")
 
@@ -82,9 +97,9 @@ def reconcile(planned: pd.DataFrame, actual: pd.DataFrame) -> pd.DataFrame:
     comparison["qty_diff"] = _quantity_difference(comparison)
     comparison["qty_diff_pct"] = _quantity_difference_pct(comparison)
     comparison["date_diff_days"] = _date_difference_days(comparison)
-    comparison["statuses"] = _collect_statuses(comparison)
+    comparison["statuses"] = _collect_statuses(comparison, date_tolerance_days)
     comparison["status"] = _headline_status(comparison["statuses"])
-    comparison["flags"] = _collect_flags(comparison)
+    comparison["flags"] = _collect_flags(comparison, date_tolerance_days)
 
     comparison = comparison[COMPARISON_COLUMNS]
     return comparison.sort_values(KEY_COLUMNS, ignore_index=True)
@@ -145,7 +160,9 @@ def _date_difference_days(comparison: pd.DataFrame) -> pd.Series:
     return difference.dt.days.astype("Int64")
 
 
-def _collect_statuses(comparison: pd.DataFrame) -> pd.Series:
+def _collect_statuses(
+    comparison: pd.DataFrame, date_tolerance_days: int = 0
+) -> pd.Series:
     """Every way a line differs from the plan, not just the worst one.
 
     A line can be short and late at once, and for a long time this column did
@@ -170,7 +187,7 @@ def _collect_statuses(comparison: pd.DataFrame) -> pd.Series:
     quantity_differs = (comparison["qty_diff"] != 0) & ordinary
     date_differs = (
         comparison["date_diff_days"].notna()
-        & (comparison["date_diff_days"] != 0)
+        & (comparison["date_diff_days"].abs() > date_tolerance_days)
         & ordinary
     )
 
@@ -205,7 +222,9 @@ def _headline_status(statuses: pd.Series) -> pd.Series:
     return statuses.map({value: pick(value) for value in statuses.unique()})
 
 
-def _collect_flags(comparison: pd.DataFrame) -> pd.Series:
+def _collect_flags(
+    comparison: pd.DataFrame, date_tolerance_days: int = 0
+) -> pd.Series:
     """Data-quality notes that are not a status on their own.
 
     Kept separate from `status` on purpose: status answers "how does this line
@@ -223,6 +242,13 @@ def _collect_flags(comparison: pd.DataFrame) -> pd.Series:
             comparison["actual_qty"].notna() & comparison["actual_date"].isna()
         ),
         FLAG_MISSING_CUSTOMER: comparison["customer"].astype(str).str.strip() == "",
+        # Moved, but not by enough to count. Recorded so that a tolerance
+        # never makes a line look like it arrived exactly as promised.
+        FLAG_WITHIN_DATE_TOLERANCE: (
+            comparison["date_diff_days"].notna()
+            & (comparison["date_diff_days"] != 0)
+            & (comparison["date_diff_days"].abs() <= date_tolerance_days)
+        ),
     }
 
     collected = pd.Series(
@@ -246,7 +272,7 @@ def _count_each_status(comparison: pd.DataFrame) -> dict:
     }
 
 
-def summarise(comparison: pd.DataFrame) -> dict:
+def summarise(comparison: pd.DataFrame, date_tolerance_days: int = 0) -> dict:
     """Aggregate the comparison into a handful of headline numbers.
 
     The return value is a small JSON-serialisable dict, because it is fed
@@ -271,6 +297,10 @@ def summarise(comparison: pd.DataFrame) -> dict:
     flag_counts = flags[flags != ""].value_counts().to_dict()
 
     return {
+        # Stated in every summary, because "how many lines are late" has a
+        # different answer under a different grace period and a figure whose
+        # meaning depends on a setting should carry the setting.
+        "date_tolerance_days": date_tolerance_days,
         "total_order_lines": total,
         "matched_lines": matched,
         "discrepancy_lines": discrepancies,

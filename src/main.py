@@ -1,4 +1,4 @@
-"""Command line entry point.
+﻿"""Command line entry point.
 
 Three commands, and the split between the last one and the rest is the point of
 the project:
@@ -104,7 +104,32 @@ def _add_agent_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _days(value: str) -> int:
+    """A tolerance argparse can reject itself, with argparse's own message.
+
+    Catching this later would mean a traceback or a hand-rolled error for
+    something the command line parser already knows how to complain about.
+    """
+    days = int(value)
+    if days < 0:
+        raise argparse.ArgumentTypeError(
+            f"a tolerance is a number of days, so it cannot be {days}."
+        )
+    return days
+
+
 def _add_data_source_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--date-tolerance",
+        type=_days,
+        default=0,
+        metavar="DAYS",
+        help=(
+            "Days a delivery may move without counting as a date discrepancy "
+            "(default: 0, every date must match). In agent mode this is only "
+            "the starting value - a question can ask for a different one."
+        ),
+    )
     parser.add_argument(
         "--planned",
         default=DEFAULT_PLANNED_PATH,
@@ -125,9 +150,10 @@ def _run_ask(arguments: argparse.Namespace) -> int:
     from google.genai import errors
 
     from .agent.agent import DEFAULT_MODEL, MissingApiKeyError, ReconciliationAgent
-    from .agent.tools import configure_data_sources
+    from .agent.tools import configure_data_sources, configure_date_tolerance
 
     configure_data_sources(arguments.planned, arguments.actual)
+    configure_date_tolerance(arguments.date_tolerance)
 
     try:
         agent = ReconciliationAgent(
@@ -169,9 +195,10 @@ def _run_chat(arguments: argparse.Namespace) -> int:
     from google.genai import errors
 
     from .agent.agent import DEFAULT_MODEL, MissingApiKeyError, ReconciliationAgent
-    from .agent.tools import configure_data_sources
+    from .agent.tools import configure_data_sources, configure_date_tolerance
 
     configure_data_sources(arguments.planned, arguments.actual)
+    configure_date_tolerance(arguments.date_tolerance)
 
     try:
         agent = ReconciliationAgent(
@@ -229,8 +256,8 @@ def _describe_api_error(error: Exception) -> str:
 def _run_report(arguments: argparse.Namespace) -> int:
     planned = load_planned_orders(arguments.planned)
     actual = load_actual_orders(arguments.actual)
-    comparison = reconcile(planned, actual)
-    summary = summarise(comparison)
+    comparison = reconcile(planned, actual, arguments.date_tolerance)
+    summary = summarise(comparison, arguments.date_tolerance)
 
     path = write_report(comparison, summary, arguments.output)
 

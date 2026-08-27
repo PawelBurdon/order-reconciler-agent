@@ -169,6 +169,22 @@ CASES: list[EvalCase] = [
         ],
     ),
     EvalCase(
+        id="tolerance_question",
+        question=(
+            "which deliveries were late if we allow a two-day grace period?"
+        ),
+        tests="The question supposes a rule the data was not compared under, "
+        "so the comparison has to be re-run with that tolerance rather than "
+        "the answer being filtered by eye afterwards. Naming a two-day slip "
+        "here means the grace period was ignored - and those are the lines "
+        "that make it visible, because they disappear under it.",
+        expect_tools=["load_and_compare"],
+        max_calls=4,
+        expect_in_answer=["ORD-1014", "ORD-1016", "ORD-1024"],
+        # Two days late each: real lines, forgiven by the rule in the question.
+        expect_not_in_answer=["ORD-1003", "ORD-1008", "ORD-1026"],
+    ),
+    EvalCase(
         id="unplanned",
         question="did anything arrive that nobody ordered?",
         tests="A status the user names in their own words rather than in the "
