@@ -466,6 +466,15 @@ hundred a day, so it is a limit a heavy day of development reaches and normal
 use does not. The workflow can be re-run from the Actions tab once the quota
 resets.
 
+The first version of that handling ground away in CI for thirty-two minutes
+before reporting the foregone conclusion, because it retried every case
+through the same wait. A 429 that survives every retry has by then waited
+several minutes, and a per-minute limit clears in one - so it is the daily
+quota, and the run stops there. No message parsing: surviving the retries is
+itself the proof. The same situation now takes two minutes and the scorecard
+says how many cases were never asked, since a run that scored nine of fifteen
+should not be able to look like a pass.
+
 ## Stack
 
 - Python 3.11+

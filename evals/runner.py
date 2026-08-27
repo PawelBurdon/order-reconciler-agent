@@ -92,10 +92,21 @@ def main(argv: list[str] | None = None) -> int:
     for position, entry in enumerate(cases):
         if position:
             time.sleep(SECONDS_BETWEEN_CASES)
-        results.append(_run_case(agent, entry, arguments.verbose))
+
+        result = _run_case(agent, entry, arguments.verbose)
+        results.append(result)
+
+        if result.get("quota_exhausted"):
+            remaining = len(cases) - position - 1
+            print(
+                f"\nThe quota is spent, not merely rate limited - this one "
+                f"waited through every retry. Stopping with {remaining} case(s) "
+                f"unasked rather than spending the same wait on each of them."
+            )
+            break
 
     _clean_up_generated_files()
-    return _report(results)
+    return _report(results, expected=len(cases))
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -155,6 +166,13 @@ def _run_case(agent: ReconciliationAgent, entry: EvalCase, verbose: bool) -> dic
                 "checks": [],
                 "calls": [],
                 "context": 0,
+                # A 429 that arrives here has already survived every retry,
+                # which is several minutes of waiting. A per-minute limit
+                # clears in one. So this is the daily quota, and asking the
+                # remaining cases would spend the same minutes to be told the
+                # same thing - the first version of this ground for half an
+                # hour in CI before reporting a foregone conclusion.
+                "quota_exhausted": getattr(error, "code", None) == 429,
             }
         calls.extend(agent.calls)
         context = max(context, agent.context_chars)
@@ -262,8 +280,13 @@ def _score(entry: EvalCase, calls: list[dict], answer: str) -> list[Check]:
     return checks
 
 
-def _report(results: list[dict]) -> int:
-    """Print the scorecard and decide the exit code."""
+def _report(results: list[dict], expected: int) -> int:
+    """Print the scorecard and decide the exit code.
+
+    `expected` is how many cases the run set out to score, which is not always
+    how many it reached. A scorecard that quietly reports on nine of fifteen
+    reads like a pass.
+    """
     failed = 0
     gaps = 0
     errored = 0
@@ -320,11 +343,12 @@ def _report(results: list[dict]) -> int:
                 print(f"      -> {call['name']}({arguments})")
             print(f'      answer: {result["answer"]}')
 
-    total = len(results)
+    unasked = expected - len(results)
     print(
-        f"\n{total - failed - errored}/{total} cases passed"
+        f"\n{len(results) - failed - errored}/{expected} cases passed"
         f"{f', {gaps} known gap(s)' if gaps else ''}"
-        f"{f', {errored} could not run' if errored else ''}."
+        f"{f', {errored} could not run' if errored else ''}"
+        f"{f', {unasked} never asked' if unasked else ''}."
     )
     for dimension, (good, seen) in by_dimension.items():
         if seen:
@@ -340,7 +364,9 @@ def _report(results: list[dict]) -> int:
             f"{max(contexts):,} peak"
         )
 
-    return EXIT_FAILED if failed or errored else 0
+    # Unasked counts as failure for the same reason errored does: a case that
+    # was not put to the model says nothing about the model.
+    return EXIT_FAILED if failed or errored or unasked else 0
 
 
 def _clean_up_generated_files() -> None:
