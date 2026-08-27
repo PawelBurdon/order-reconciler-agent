@@ -1,4 +1,4 @@
-# order-reconciler-agent
+﻿# order-reconciler-agent
 
 An AI agent that answers plain-English questions about the gaps between what
 customers ordered and what was actually delivered, with every number computed
@@ -118,7 +118,6 @@ src/
   agent/     tools.py   agent.py       prompts.py   schemas, loop, prompt
   main.py                                           the CLI
 ```
-
 
 The model decides *which* question to ask of the data. It never answers it.
 
@@ -292,6 +291,81 @@ sending a function call whose response was pruned, which the API rejects.
 
 `/reset` clears it when the subject changes.
 
+## Evaluating the tool selection
+
+The test suite checks what the tools do. It cannot check the thing that
+actually decides whether this works: whether the model reaches for the right
+one. Those fail differently. A tool can be flawless and never be chosen, and
+rewording a description to read better can quietly make the model choose worse
+with nothing going red anywhere.
+
+So there is an eval set - questions paired with what a good answer to them has
+to satisfy - in `evals/cases.py`. Each case scores three things separately,
+because "was the answer right" hides all three:
+
+- **selection** - was the right tool reached for, and the wrong one left alone
+- **efficiency** - how many calls it took to get there
+- **grounding** - did the real figures end up in the answer, and did invented
+  ones stay out
+
+Cases assert what would be *wrong*, not what would be *different*: a required
+tool, a call budget, figures that must appear. Never an exact sequence of
+calls. The model is allowed to think differently on different days, and an eval
+that goes red when it does is an eval that gets switched off within a week.
+
+```bash
+python -m evals.runner
+python -m evals.runner --case worst_customer --verbose
+```
+
+```
+Evaluating 9 cases against gemini-3.5-flash-lite
+
+overview               pass   5/5 checks   2 calls
+worst_customer         pass   4/4 checks   3 calls
+customers_in_month     pass   5/5 checks   2 calls
+biggest_shortfalls     GAP    6/7 checks   7 calls
+    efficiency: 7 calls, at most 3 allowed
+    known gap: top_discrepancies has no direction argument; roadmap item 1.
+unplanned              pass   4/4 checks   2 calls
+report                 pass   3/3 checks   2 calls
+unknown_customer       pass   3/3 checks   2 calls
+out_of_scope           pass   5/5 checks   1 calls
+self_description       pass   3/3 checks   1 calls
+
+9/9 cases passed, 1 known gap(s).
+  selection   7/7
+  efficiency  8/9
+  grounding   23/23
+```
+
+Splitting the score by dimension is what makes that readable. Grounding is
+23/23 - across nine questions, including one about a company that does not
+exist and one about a column that does not exist, no figure was invented.
+Selection is 7/7 - the right tool every time. The single miss is efficiency,
+and it is the known gap: seven calls to assemble a ranking the schema cannot
+express in one. A single overall percentage would have blurred a clean result
+and a specific, already-diagnosed weakness into the same number.
+
+Two of the nine cases are worth pointing at. `unknown_customer` asks about a
+company that is not in the data and `out_of_scope` asks for a figure the files
+do not contain - the failure being watched for there is not a wrong answer but
+a confident one. And `biggest_shortfalls` is marked as a known gap: it is run
+and reported, but does not fail the build, because the reason it takes too many
+calls is item 1 on the roadmap. Its call budget is already set to the number it
+should reach once that lands, so closing the gap will be a measurement rather
+than a claim.
+
+The figures the cases expect are not typed in and trusted. `tests/test_evals.py`
+recomputes each of them from the sample data with pandas and compares, so
+editing the CSVs breaks the eval set loudly instead of making the model look
+like it got worse.
+
+That test runs on every push. The eval itself does not: it needs a key, it
+costs money and it is not deterministic, so it is a separate CI job that runs
+when a `GEMINI_API_KEY` secret is configured and says plainly that it skipped
+when there is none.
+
 ## Stack
 
 - Python 3.11+
@@ -421,6 +495,14 @@ dropped. That traffic is the bulk of the history and is stale by the next
 question, while the talking is short and is what *them* or *that order* refers
 back to. A long conversation therefore costs about what a short one does.
 
+**An eval set for tool selection.** The tests could say the tools were correct
+and nothing could say the model still chose them well. Nine cases now score
+selection, efficiency and grounding separately, the figures they expect are
+recomputed from the sample data rather than trusted, and the one case the tool
+API cannot yet answer cleanly is marked as a known gap with its call budget
+already set to the number it should reach when that gap closes. Details in the
+section above.
+
 **An agent that explains itself.** This one was never on the list. It came from
 watching someone open the program and not know what to type. Asking *what is
 this and what can you tell me?* now gets the real customers, the real period
@@ -435,36 +517,31 @@ shortfalls and surpluses compete in one list. Ask for the biggest shortfalls
 and the model gets a surplus in the results, notices, and reassembles the
 ranking out of whatever else is available - by a different route on each run.
 A `direction="shortfall" | "surplus" | "any"` argument answers it in one call.
-This is first because the evidence for it is already in a trace, the same way
-`group_by`'s was.
+This is first because it is the only item whose payoff is already measured: the
+`biggest_shortfalls` eval case currently spends seven calls against a budget of
+three, and that budget is the number the fix should bring it to.
 
-**2. Write an eval set for tool selection.** The tests cover what the tools do,
-not whether the model picks the right one. That needs a fixture of questions
-paired with the calls they should produce, run against the schemas. It is
-second because everything below changes tool descriptions, and right now
-nothing catches a description edit that quietly makes the model choose worse.
-
-**3. Filter the ranking tools the way `group_by` can be filtered.**
+**2. Filter the ranking tools the way `group_by` can be filtered.**
 `top_discrepancies` covers the whole dataset while `group_by` takes a date
 range, so *the biggest shortfalls in September* still has no single call that
 answers it. Consistency between tools is part of a schema being usable.
 
-**4. Make the date comparison tolerant.** A delivery one day late and one
+**3. Make the date comparison tolerant.** A delivery one day late and one
 thirty days late are both `DATE_MISMATCH`. A real reconciliation has a
 tolerance window, and lateness should be rankable the way quantity is.
 
-**5. Reconsider one status per line.** A line that is both short and late is
+**4. Reconsider one status per line.** A line that is both short and late is
 reported as `QTY_MISMATCH`; the slip survives in `date_diff_days`, but the
 headline hides it. A list of statuses would be more honest, at the cost of a
 column that is harder to filter on.
 
-**6. Measure what the history compaction costs.** Dropping the tool results
+**5. Measure what the history compaction costs.** Dropping the tool results
 between questions rests on an argument - a stale result is worth less than the
 tokens it occupies - that is reasonable and untested. The way to know is the
-same eval harness as item 2, pointed at follow-up questions answered with and
+eval harness above, pointed at follow-up questions answered with and
 without the pruning.
 
-**7. Cache the comparison across runs.** It is recomputed on every invocation.
+**6. Cache the comparison across runs.** It is recomputed on every invocation.
 Fine for 31 rows, wasteful for a real extract; parquet beside the CSVs with a
 staleness check would fix it. Last because `chat` already reuses one comparison
 for a whole session, so the waste is now per session rather than per question.

@@ -52,6 +52,10 @@ class ReconciliationAgent:
         self.max_iterations = max_iterations
         self.remember = remember
         self.history: list[types.Content] = []
+        # The calls made while answering the most recent question. --verbose
+        # prints them for a human; this records them for a program, which is
+        # what the eval harness scores.
+        self.calls: list[dict] = []
         self.client = genai.Client(api_key=_read_api_key())
 
         self.config = types.GenerateContentConfig(
@@ -71,6 +75,7 @@ class ReconciliationAgent:
         """Run the conversation until the model answers with text."""
         contents: list[types.Content] = list(self.history)
         contents.append(types.Content(role="user", parts=[types.Part(text=question)]))
+        self.calls = []
 
         for iteration in range(1, self.max_iterations + 1):
             response = self.client.models.generate_content(
@@ -99,6 +104,7 @@ class ReconciliationAgent:
             result_parts = []
             for call in calls:
                 arguments = dict(call.args or {})
+                self.calls.append({"name": call.name, "arguments": arguments})
                 self._trace_call(call.name, arguments)
                 result = execute_tool(call.name, arguments)
                 self._trace_result(result)

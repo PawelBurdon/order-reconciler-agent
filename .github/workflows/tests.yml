@@ -38,3 +38,38 @@ jobs:
       # key is the only way to be sure that stays true.
       - name: Build the Excel report without an API key
         run: python -m src.main report --output report.xlsx
+
+  # Whether the model still picks the right tool is a separate question from
+  # whether the tools work, and it cannot be answered without calling the
+  # model. So it is a separate job: slower, billable, and it needs a key. The
+  # checks on the eval set that need no model already ran above.
+  evals:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Skipped rather than failed when no key is configured: a fork, or a
+      # clone by somebody who has not added the secret, should still get a
+      # green build. What it must never do is pass silently, so it says so.
+      - name: Evaluate tool selection
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "No GEMINI_API_KEY secret is configured, so the model-in-the-loop"
+            echo "evaluation did not run. Add one under Settings > Secrets and"
+            echo "variables > Actions to enable it. The checks on the eval set"
+            echo "itself ran in the test job."
+            exit 0
+          fi
+          python -m evals.runner
